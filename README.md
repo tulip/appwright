@@ -67,7 +67,7 @@ Currently supports apps with a **single WebView only**. The framework automatica
 
 ### Minimum requirements
 
-- Node 18.20.4 or higher
+- Node 20.19.0 (with the semver range ^20.19.0 || ^22.12.0 || >=24.0.0), as well as the minimum npm version to 10
 
 ### Install
 
