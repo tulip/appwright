@@ -1,5 +1,6 @@
-import { Device } from "../device";
-import { z } from "zod";
+import { z } from 'zod';
+
+import { Device } from '../device';
 
 export type ExtractType<T> = T extends z.ZodType ? z.infer<T> : never;
 
@@ -37,11 +38,7 @@ export interface DeviceProvider {
    * @param reason for the test status
    * @param name of the test
    */
-  syncTestDetails?: (details: {
-    status?: string;
-    reason?: string;
-    name?: string;
-  }) => Promise<void>;
+  syncTestDetails?: (details: { status?: string; reason?: string; name?: string }) => Promise<void>;
 }
 
 export type AppwrightConfig = {
@@ -60,10 +57,34 @@ export type DeviceConfig =
   | EmulatorConfig;
 
 /**
+ * Configuration options for app reset behavior between test sessions.
+ */
+export type AppResetConfig = {
+  /**
+   * Whether to completely uninstall the app before starting a new test session.
+   * When set to `true`, the application under test will be fully uninstalled before each session starts,
+   * ensuring a completely clean state. Note that app data might be cached on real devices under particular circumstances.
+   *
+   * @default false - App is not uninstalled between sessions
+   */
+  uninstallAppBeforeTest?: boolean;
+
+  /**
+   * Whether to preserve the application state between test sessions.
+   * When set to `true`, the app is not terminated and its data is not cleaned between sessions,
+   * allowing tests to continue from the previous state.
+   * When set to `false`, the app is terminated and all its data is cleaned before each session.
+   *
+   * @default true - App state is preserved between sessions
+   */
+  preserveAppState?: boolean;
+};
+
+/**
  * Configuration for devices running on Browserstack.
  */
 export type BrowserStackConfig = {
-  provider: "browserstack";
+  provider: 'browserstack';
 
   /**
    * The name of the device to be used on Browserstack.
@@ -93,7 +114,7 @@ export type BrowserStackConfig = {
 };
 
 export type LambdaTestConfig = {
-  provider: "lambdatest";
+  provider: 'lambdatest';
 
   /**
    * The name of the device to be used on LambdaTest.
@@ -126,7 +147,7 @@ export type LambdaTestConfig = {
  * Configuration for locally connected physical devices.
  */
 export type LocalDeviceConfig = {
-  provider: "local-device";
+  provider: 'local-device';
   name?: string;
 
   /**
@@ -139,13 +160,29 @@ export type LocalDeviceConfig = {
    * Default orientation is "portrait".
    */
   orientation?: DeviceOrientation;
-};
+
+  /**
+   * **iOS only**: Custom WDA (WebDriverAgent) bundle ID to use.
+   *
+   * This is useful when using a custom-built WebDriverAgent with a different bundle identifier. Defaults to "com.facebook.WebDriverAgentRunner" if not specified.
+   * This property is only applicable when `platform` is set to `Platform.IOS` and will be ignored on Android.
+   *
+   * @example
+   * ```typescript
+   * device: {
+   *   provider: 'local-device',
+   *   updatedWDABundleId: 'co.tulip.WebDriverAgentRunner'
+   * }
+   * ```
+   */
+  updatedWDABundleId?: string;
+} & AppResetConfig;
 
 /**
  * Configuration for running tests on an Android or iOS emulator.
  */
 export type EmulatorConfig = {
-  provider: "emulator";
+  provider: 'emulator';
   name?: string;
   osVersion?: string;
 
@@ -159,21 +196,21 @@ export type EmulatorConfig = {
    * Default orientation is "portrait".
    */
   orientation?: DeviceOrientation;
-};
+} & AppResetConfig;
 
 export enum Platform {
-  ANDROID = "android",
-  IOS = "ios",
+  ANDROID = 'android',
+  IOS = 'ios',
 }
 
 export enum DeviceOrientation {
-  PORTRAIT = "portrait",
-  LANDSCAPE = "landscape",
+  PORTRAIT = 'portrait',
+  LANDSCAPE = 'landscape',
 }
 
 export enum ScrollDirection {
-  UP = "up",
-  DOWN = "down",
+  UP = 'up',
+  DOWN = 'down',
 }
 
 export interface AppwrightLocator {
@@ -227,10 +264,7 @@ export interface AppwrightLocator {
    * @param state The state to wait for
    * @param options Use this to override the timeout for this action
    */
-  waitFor(
-    state: "attached" | "visible",
-    options?: ActionOptions,
-  ): Promise<void>;
+  waitFor(state: 'attached' | 'visible', options?: ActionOptions): Promise<void>;
 
   /**
    * Waits for the element to be visible, while attempting for the `timeout` duration.
@@ -261,8 +295,8 @@ export interface AppwrightLocator {
 }
 
 export enum WebDriverErrors {
-  StaleElementReferenceError = "stale element reference",
+  StaleElementReferenceError = 'stale element reference',
 }
 
 export type ElementReference = Record<ElementReferenceId, string>;
-export type ElementReferenceId = "element-6066-11e4-a52e-4f735466cecf";
+export type ElementReferenceId = 'element-6066-11e4-a52e-4f735466cecf';

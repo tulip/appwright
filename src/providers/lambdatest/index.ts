@@ -1,12 +1,18 @@
-import retry from "async-retry";
-import fs from "fs";
-import FormData from "form-data";
-import path from "path";
-import { AppwrightConfig, DeviceProvider, LambdaTestConfig } from "../../types";
-import { FullProject } from "@playwright/test";
-import { Device } from "../../device";
-import { logger } from "../../logger";
-import { getAuthHeader } from "./utils";
+import retry from 'async-retry';
+import FormData from 'form-data';
+import fs from 'fs';
+import path from 'path';
+
+import { FullProject } from '@playwright/test';
+
+import { Device } from '../../device';
+import { logger } from '../../logger';
+import {
+  AppwrightConfig,
+  DeviceProvider,
+  LambdaTestConfig,
+} from '../../types';
+import { getAuthHeader } from './utils';
 
 type LambdatestSessionDetails = {
   name: string;
@@ -33,22 +39,21 @@ const browserStackToLambdaTest: {
   osVersion: Record<string, string>;
 } = {
   deviceName: {
-    "Google Pixel 8": "Pixel 8",
+    'Google Pixel 8': 'Pixel 8',
   },
   osVersion: {
-    "14.0": "14",
+    '14.0': '14',
   },
 };
 
-const API_BASE_URL =
-  "https://mobile-api.lambdatest.com/mobile-automation/api/v1";
+const API_BASE_URL = 'https://mobile-api.lambdatest.com/mobile-automation/api/v1';
 
 const envVarKeyForBuild = (projectName: string) =>
   `LAMBDATEST_APP_URL_${projectName.toUpperCase()}`;
 
 async function getSessionDetails(sessionId: string) {
   const response = await fetch(`${API_BASE_URL}/sessions/${sessionId}`, {
-    method: "GET",
+    method: 'GET',
     headers: {
       Authorization: getAuthHeader(),
     },
@@ -71,27 +76,23 @@ export class LambdaTestDeviceProvider implements DeviceProvider {
   ) {
     if (!appBundleId) {
       throw new Error(
-        "App Bundle ID is required for running tests on LambdaTest. Set the `appBundleId` for your projects that run on this provider.",
+        'App Bundle ID is required for running tests on LambdaTest. Set the `appBundleId` for your projects that run on this provider.',
       );
     }
   }
 
   async globalSetup() {
     if (!this.project.use.buildPath) {
-      throw new Error(
-        `Build path not found. Please set the build path in the config file.`,
-      );
+      throw new Error(`Build path not found. Please set the build path in the config file.`);
     }
-    if (
-      !(process.env.LAMBDATEST_USERNAME && process.env.LAMBDATEST_ACCESS_KEY)
-    ) {
+    if (!(process.env.LAMBDATEST_USERNAME && process.env.LAMBDATEST_ACCESS_KEY)) {
       throw new Error(
-        "LAMBDATEST_USERNAME and LAMBDATEST_ACCESS_KEY are required environment variables for this device provider. Please set the LAMBDATEST_USERNAME and LAMBDATEST_ACCESS_KEY environment variables.",
+        'LAMBDATEST_USERNAME and LAMBDATEST_ACCESS_KEY are required environment variables for this device provider. Please set the LAMBDATEST_USERNAME and LAMBDATEST_ACCESS_KEY environment variables.',
       );
     }
     const buildPath = this.project.use.buildPath!;
-    const isHttpUrl = buildPath.startsWith("http");
-    const isLambdaTestUrl = buildPath.startsWith("lt://");
+    const isHttpUrl = buildPath.startsWith('http');
+    const isLambdaTestUrl = buildPath.startsWith('lt://');
     let appUrl: string | undefined = undefined;
     if (isLambdaTestUrl) {
       appUrl = buildPath;
@@ -103,8 +104,8 @@ export class LambdaTestDeviceProvider implements DeviceProvider {
       if (isHttpUrl) {
         body = new URLSearchParams({
           url: buildPath,
-          visibility: "team",
-          storage: "url",
+          visibility: 'team',
+          storage: 'url',
           name: this.projectName,
         });
       } else {
@@ -112,27 +113,24 @@ export class LambdaTestDeviceProvider implements DeviceProvider {
           throw new Error(`Build file not found: ${buildPath}`);
         }
         const form = new FormData();
-        form.append("visibility", "team");
-        form.append("storage", "file");
-        form.append("appFile", fs.createReadStream(buildPath));
-        form.append("name", this.projectName);
+        form.append('visibility', 'team');
+        form.append('storage', 'file');
+        form.append('appFile', fs.createReadStream(buildPath));
+        form.append('name', this.projectName);
         headers = { ...headers, ...form.getHeaders() };
         body = form;
       }
       logger.log(`Uploading: ${buildPath}`);
-      const fetch = (await import("node-fetch")).default;
-      const response = await fetch(
-        `https://manual-api.lambdatest.com/app/upload/realDevice`,
-        {
-          method: "POST",
-          headers,
-          body,
-        },
-      );
+      const fetch = (await import('node-fetch')).default;
+      const response = await fetch(`https://manual-api.lambdatest.com/app/upload/realDevice`, {
+        method: 'POST',
+        headers,
+        body,
+      });
       const data = await response.json();
       appUrl = (data as any).app_url;
       if (!appUrl) {
-        logger.error("Uploading the build failed:", data);
+        logger.error('Uploading the build failed:', data);
       }
     }
     process.env[envVarKeyForBuild(this.project.name)] = appUrl;
@@ -148,13 +146,13 @@ export class LambdaTestDeviceProvider implements DeviceProvider {
     const device = this.project.use.device as LambdaTestConfig;
     if (!device.name || !device.osVersion) {
       throw new Error(
-        "Device name and osVersion are required for running tests on LambdaTest. Please set the device name and osVersion in the `appwright.config.ts` file.",
+        'Device name and osVersion are required for running tests on LambdaTest. Please set the device name and osVersion in the `appwright.config.ts` file.',
       );
     }
   }
 
   private async createDriver(config: any): Promise<Device> {
-    const WebDriver = (await import("webdriver")).default;
+    const WebDriver = (await import('webdriver')).default;
     const webDriverClient = await WebDriver.newSession(config);
     this.sessionId = webDriverClient.sessionId;
     const testOptions = {
@@ -187,17 +185,15 @@ export class LambdaTestDeviceProvider implements DeviceProvider {
         await retry(
           async () => {
             const response = await fetch(videoURL, {
-              method: "GET",
+              method: 'GET',
             });
             if (response.status !== 200) {
               // Retry if not 200
-              throw new Error(
-                `Video not found: ${response.status} (URL: ${videoURL})`,
-              );
+              throw new Error(`Video not found: ${response.status} (URL: ${videoURL})`);
             }
             const reader = response.body?.getReader();
             if (!reader) {
-              throw new Error("Failed to get reader from response body.");
+              throw new Error('Failed to get reader from response body.');
             }
             const streamToFile = async () => {
               // eslint-disable-next-line no-constant-condition
@@ -214,28 +210,27 @@ export class LambdaTestDeviceProvider implements DeviceProvider {
             retries: 10,
             minTimeout: 3_000,
             onRetry: (err, i) => {
+              const message = err instanceof Error ? err.message : String(err);
               if (i > 5) {
-                logger.warn(`Retry attempt ${i} failed: ${err.message}`);
+                logger.warn(`Retry attempt ${i} failed: ${message}`);
               }
             },
           },
         );
         return new Promise((resolve, reject) => {
           // Ensure file stream is closed even in case of an error
-          fileStream.on("finish", () => {
+          fileStream.on('finish', () => {
             try {
               fs.renameSync(tempPathForWriting, pathToTestVideo);
-              logger.log(
-                `Download finished and file closed: ${pathToTestVideo}`,
-              );
-              resolve({ path: pathToTestVideo, contentType: "video/mp4" });
+              logger.log(`Download finished and file closed: ${pathToTestVideo}`);
+              resolve({ path: pathToTestVideo, contentType: 'video/mp4' });
             } catch (err) {
               logger.error(`Failed to rename file: `, err);
               reject(err);
             }
           });
 
-          fileStream.on("error", (err) => {
+          fileStream.on('error', (err) => {
             logger.error(`Failed to write file: ${err.message}`);
             reject(err);
           });
@@ -249,16 +244,12 @@ export class LambdaTestDeviceProvider implements DeviceProvider {
     }
   }
 
-  async syncTestDetails(details: {
-    status?: string;
-    reason?: string;
-    name?: string;
-  }) {
+  async syncTestDetails(details: { status?: string; reason?: string; name?: string }) {
     const response = await fetch(`${API_BASE_URL}/sessions/${this.sessionId}`, {
-      method: "PATCH",
+      method: 'PATCH',
       headers: {
         Authorization: getAuthHeader(),
-        "Content-Type": "application/json",
+        'Content-Type': 'application/json',
       },
       body: details.status
         ? JSON.stringify({
@@ -282,17 +273,11 @@ export class LambdaTestDeviceProvider implements DeviceProvider {
   private deviceInfoForSession() {
     let deviceName = this.project.use.device?.name;
     let osVersion = (this.project.use.device as LambdaTestConfig).osVersion;
-    if (
-      deviceName &&
-      Object.keys(browserStackToLambdaTest.deviceName).includes(deviceName)
-    ) {
+    if (deviceName && Object.keys(browserStackToLambdaTest.deviceName).includes(deviceName)) {
       // we map BrowserStack names to LambdaTest for better usability
       deviceName = browserStackToLambdaTest.deviceName[deviceName];
     }
-    if (
-      osVersion &&
-      Object.keys(browserStackToLambdaTest.osVersion).includes(osVersion)
-    ) {
+    if (osVersion && Object.keys(browserStackToLambdaTest.osVersion).includes(osVersion)) {
       osVersion = browserStackToLambdaTest.osVersion[osVersion]!;
     }
     return {
@@ -306,21 +291,19 @@ export class LambdaTestDeviceProvider implements DeviceProvider {
     const platformName = this.project.use.platform;
     const envVarKey = envVarKeyForBuild(this.project.name);
     if (!process.env[envVarKey]) {
-      throw new Error(
-        `process.env.${envVarKey} is not set. Did the file upload work?`,
-      );
+      throw new Error(`process.env.${envVarKey} is not set. Did the file upload work?`);
     }
     return {
       port: 443,
-      protocol: "https",
-      path: "/wd/hub",
-      logLevel: "warn",
+      protocol: 'https',
+      path: '/wd/hub',
+      logLevel: 'warn',
       user: process.env.LAMBDATEST_USERNAME,
       key: process.env.LAMBDATEST_ACCESS_KEY,
-      hostname: "mobile-hub.lambdatest.com",
+      hostname: 'mobile-hub.lambdatest.com',
       capabilities: {
         ...this.deviceInfoForSession(),
-        appiumVersion: "2.3.0",
+        appiumVersion: '2.3.0',
         platformName: platformName,
         queueTimeout: 600,
         idleTimeout: 600,
@@ -328,7 +311,7 @@ export class LambdaTestDeviceProvider implements DeviceProvider {
         devicelog: true,
         video: true,
         build: `${this.projectName} ${platformName} ${
-          process.env.GITHUB_ACTIONS === "true"
+          process.env.GITHUB_ACTIONS === 'true'
             ? `CI ${process.env.GITHUB_RUN_ID}`
             : process.env.USER
         }`,
@@ -338,7 +321,7 @@ export class LambdaTestDeviceProvider implements DeviceProvider {
         isRealMobile: true,
         enableImageInjection: (this.project.use.device as LambdaTestConfig)
           ?.enableCameraImageInjection,
-        "settings[snapshotMaxDepth]": 62,
+        'settings[snapshotMaxDepth]': 62,
       },
     };
   }

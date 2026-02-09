@@ -1,25 +1,23 @@
-import test from "@playwright/test";
-import fs from "fs";
-import path from "path";
+import fs from 'fs';
+import path from 'path';
 
-export function boxedStep(
-  target: Function,
-  context: ClassMethodDecoratorContext,
-) {
+import test from '@playwright/test';
+
+export function boxedStep(target: Function, context: ClassMethodDecoratorContext) {
   return function replacementMethod(
     this: {
       selector: string | RegExp;
     },
     ...args: any
   ) {
-    const path = this.selector ? `("${this.selector}")` : "";
+    const path = this.selector ? `("${this.selector}")` : '';
     const argsString = args.length
-      ? "(" +
+      ? '(' +
         Array.from(args)
           .map((a) => JSON.stringify(a))
-          .join(" , ") +
-        ")"
-      : "";
+          .join(' , ') +
+        ')'
+      : '';
     const name = `${context.name as string}${path}${argsString}`;
     return test.step(
       name,
@@ -31,14 +29,9 @@ export function boxedStep(
   };
 }
 
-export function validateBuildPath(
-  buildPath: string | undefined,
-  expectedExtension: string,
-) {
+export function validateBuildPath(buildPath: string | undefined, expectedExtension: string) {
   if (!buildPath) {
-    throw new Error(
-      `Build path not found. Please set the build path in appwright.config.ts`,
-    );
+    throw new Error(`Build path not found. Please set the build path in appwright.config.ts`);
   }
 
   if (!buildPath.endsWith(expectedExtension)) {
@@ -55,17 +48,13 @@ Please provide the correct path of the build.`,
   }
 }
 
-export function getLatestBuildToolsVersions(
-  versions: string[],
-): string | undefined {
+export function getLatestBuildToolsVersions(versions: string[]): string | undefined {
   return versions.sort((a, b) => (a > b ? -1 : 1))[0];
 }
 
 export function longestDeterministicGroup(pattern: RegExp): string | undefined {
   const patternToString = pattern.toString();
-  const matches = [...patternToString.matchAll(/\(([^)]+)\)/g)].map(
-    (match) => match[1],
-  );
+  const matches = [...patternToString.matchAll(/\(([^)]+)\)/g)].map((match) => match[1]);
   if (!matches || !matches.length) {
     return undefined;
   }
@@ -78,14 +67,27 @@ export function longestDeterministicGroup(pattern: RegExp): string | undefined {
   });
   const longestString = noSpecialChars.reduce(
     (max, str) => (str.length > max.length ? str : max),
-    "",
+    '',
   );
-  if (longestString == "") {
+  if (longestString == '') {
     return undefined;
   }
   return longestString;
 }
 
 export function basePath() {
-  return path.join(process.cwd(), "playwright-report", "data", "videos-store");
+  return path.join(process.cwd(), 'playwright-report', 'data', 'videos-store');
+}
+
+export function isNoSuchWindowError(error: unknown): boolean {
+  if (error instanceof Error) {
+    if (error.name && error.name.toLowerCase().includes('nosuchwindowerror')) {
+      return true;
+    }
+    if (error.message && error.message.toLowerCase().includes('no such window')) {
+      return true;
+    }
+  }
+  const errorString = String(error).toLowerCase();
+  return errorString.includes('no such window') || errorString.includes('nosuchwindowerror');
 }

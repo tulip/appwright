@@ -1,32 +1,30 @@
+import { FullProject } from '@playwright/test';
+
+import { Device } from '../../device';
+import { logger } from '../../logger';
 import {
   AppwrightConfig,
   DeviceProvider,
   EmulatorConfig,
   Platform,
   TimeoutOptions,
-} from "../../types";
-import { Device } from "../../device";
+} from '../../types';
+import { validateBuildPath } from '../../utils';
 import {
   getApkDetails,
+  getAppBundleId,
   installDriver,
   isEmulatorInstalled,
   startAppiumServer,
-} from "../appium";
-import { FullProject } from "@playwright/test";
-import { validateBuildPath } from "../../utils";
-import { logger } from "../../logger";
+} from '../appium';
 
 export class EmulatorProvider implements DeviceProvider {
   sessionId?: string;
+  private cachedPackageName?: string;
 
-  constructor(
-    private project: FullProject<AppwrightConfig>,
-    appBundleId: string | undefined,
-  ) {
+  constructor(private project: FullProject<AppwrightConfig>, appBundleId: string | undefined) {
     if (appBundleId) {
-      logger.log(
-        `Bundle id is specified (${appBundleId}) but ignored for Emulator provider.`,
-      );
+      logger.log(`Bundle id is specified (${appBundleId}) but ignored for Emulator provider.`);
     }
   }
 
@@ -37,12 +35,13 @@ export class EmulatorProvider implements DeviceProvider {
   async globalSetup() {
     validateBuildPath(
       this.project.use.buildPath,
-      this.project.use.platform == Platform.ANDROID ? ".apk" : ".app",
+      this.project.use.platform == Platform.ANDROID ? '.apk' : '.app',
     );
+
     if (this.project.use.platform == Platform.ANDROID) {
       const androidHome = process.env.ANDROID_HOME;
       const androidSimulatorConfigDocLink =
-        "https://github.com/empirical-run/appwright/blob/main/docs/config.md#android-emulator";
+        'https://github.com/empirical-run/appwright/blob/main/docs/config.md#android-emulator';
       if (!androidHome) {
         throw new Error(
           `The ANDROID_HOME environment variable is not set. 
@@ -66,26 +65,25 @@ Follow the steps mentioned in ${androidSimulatorConfigDocLink} to run test on An
 
   private async createDriver(): Promise<Device> {
     await installDriver(
-      this.project.use.platform == Platform.ANDROID
-        ? "uiautomator2"
-        : "xcuitest",
+      this.project.use.platform == Platform.ANDROID ? 'uiautomator2' : 'xcuitest',
     );
     await startAppiumServer(this.project.use.device?.provider!);
-    const WebDriver = (await import("webdriver")).default;
-    const webDriverClient = await WebDriver.newSession(
-      await this.createConfig(),
-    );
+    const WebDriver = (await import('webdriver')).default;
+    const webDriverClient = await WebDriver.newSession(await this.createConfig());
     this.sessionId = webDriverClient.sessionId;
+
+    let bundleId: string;
+    if (this.project.use.platform == Platform.ANDROID) {
+      bundleId = this.cachedPackageName!;
+    } else {
+      bundleId = await getAppBundleId(this.project.use.buildPath!);
+    }
+
     const expectTimeout = this.project.use.expectTimeout!;
     const testOptions: TimeoutOptions = {
       expectTimeout,
     };
-    return new Device(
-      webDriverClient,
-      undefined,
-      testOptions,
-      this.project.use.device?.provider!,
-    );
+    return new Device(webDriverClient, bundleId, testOptions, this.project.use.device?.provider!);
   }
 
   private async createConfig() {
@@ -95,31 +93,42 @@ Follow the steps mentioned in ${androidSimulatorConfigDocLink} to run test on An
     let appLaunchableActivity: string | undefined;
 
     if (platformName == Platform.ANDROID) {
-      const { packageName, launchableActivity } = await getApkDetails(
-        this.project.use.buildPath!,
-      );
+      const { packageName, launchableActivity } = await getApkDetails(this.project.use.buildPath!);
       appPackageName = packageName!;
       appLaunchableActivity = launchableActivity!;
+      this.cachedPackageName = packageName;
     }
     return {
       port: 4723,
       capabilities: {
-        "appium:deviceName": this.project.use.device?.name,
-        "appium:udid": udid,
-        "appium:automationName":
-          platformName == Platform.ANDROID ? "uiautomator2" : "xcuitest",
-        "appium:platformVersion": (this.project.use.device as EmulatorConfig)
-          .osVersion,
-        "appium:appActivity": appLaunchableActivity,
-        "appium:appPackage": appPackageName,
+        'appium:deviceName': this.project.use.device?.name,
+        'appium:udid': udid,
+        'appium:automationName': platformName == Platform.ANDROID ? 'uiautomator2' : 'xcuitest',
+        'appium:platformVersion': (this.project.use.device as EmulatorConfig).osVersion,
+        'appium:appActivity': appLaunchableActivity,
+        'appium:appPackage': appPackageName,
         platformName: platformName,
-        "appium:autoGrantPermissions": true,
-        "appium:app": this.project.use.buildPath,
-        "appium:autoAcceptAlerts": true,
-        "appium:fullReset": true,
-        "appium:deviceOrientation": this.project.use.device?.orientation,
-        "appium:settings[snapshotMaxDepth]": 62,
-        "appium:wdaLaunchTimeout": 300_000,
+        'appium:autoGrantPermissions': true,
+        'appium:app': this.project.use.buildPath,
+        'appium:autoAcceptAlerts': true,
+        'appium:deviceOrientation': this.project.use.device?.orientation,
+        'appium:settings[snapshotMaxDepth]': 62,
+
+        'appium:fullReset':
+          (this.project.use.device as EmulatorConfig).uninstallAppBeforeTest ?? false,
+        'appium:noReset': (this.project.use.device as EmulatorConfig).preserveAppState ?? true,
+
+        'appium:newCommandTimeout': 300,
+
+        ...(platformName == Platform.IOS && {
+          'appium:wdaLaunchTimeout': 600_000,
+          'appium:useNewWDA': false,
+          'appium:iosInstallPause': 5000,
+        }),
+
+        ...(platformName == Platform.ANDROID && {
+          'appium:extractChromeAndroidPackageFromContextName': true,
+        }),
       },
     };
   }

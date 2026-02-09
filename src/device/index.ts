@@ -1,19 +1,26 @@
-// @ts-ignore ts not able to identify the import is just an interface
-import type { Client as WebDriverClient } from "webdriver";
-import { Locator } from "../locator";
+import type { Client as WebDriverClient } from 'webdriver';
+import { z } from 'zod';
+
+import { LLMModel } from '@empiricalrun/llm';
+
+import { Locator } from '../locator';
+import { logger } from '../logger';
+import { uploadImageToBS } from '../providers/browserstack/utils';
+import { uploadImageToLambdaTest } from '../providers/lambdatest/utils';
 import {
   AppwrightLocator,
   ExtractType,
   Platform,
   TimeoutOptions,
-} from "../types";
-import { AppwrightVision, VisionProvider } from "../vision";
-import { boxedStep, longestDeterministicGroup } from "../utils";
-import { uploadImageToBS } from "../providers/browserstack/utils";
-import { uploadImageToLambdaTest } from "../providers/lambdatest/utils";
-import { z } from "zod";
-import { LLMModel } from "@empiricalrun/llm";
-import { logger } from "../logger";
+} from '../types';
+import {
+  boxedStep,
+  longestDeterministicGroup,
+} from '../utils';
+import {
+  AppwrightVision,
+  VisionProvider,
+} from '../vision';
 
 export class Device {
   constructor(
@@ -22,6 +29,57 @@ export class Device {
     private timeoutOpts: TimeoutOptions,
     private provider: string,
   ) {}
+
+  /**
+   * Creates a locator without any context switching. Use locator() method instead for
+   * automatic context switching.
+   * @internal
+   */
+  createLocator({
+    selector,
+    findStrategy,
+    textToMatch,
+  }: {
+    selector: string;
+    findStrategy: string;
+    textToMatch?: string | RegExp;
+  }): AppwrightLocator {
+    return new Locator(this.webDriverClient, this.timeoutOpts, selector, findStrategy, textToMatch);
+  }
+
+  /**
+   * Ensures we're in NATIVE_APP context before any operation
+   */
+  private async ensureNativeContext(): Promise<void> {
+    const currentContext = await this.getCurrentContext();
+    console.log('[Device] Current context:', currentContext);
+    if (currentContext !== 'NATIVE_APP') {
+      console.log('[Device] Switching to NATIVE_APP context');
+      await this.switchToNativeContext();
+    }
+  }
+
+  /**
+   * Wraps a locator to automatically switch to native context before any action
+   */
+  private wrapWithNativeContext(locator: AppwrightLocator): AppwrightLocator {
+    const self = this;
+    return new Proxy(locator, {
+      get(target, prop) {
+        const original = target[prop as keyof AppwrightLocator];
+
+        // Wrap all async methods (actions that interact with elements)
+        if (typeof original === 'function' && prop !== 'constructor') {
+          return async function (...args: any[]) {
+            await self.ensureNativeContext();
+            return await (original as Function).apply(target, args);
+          };
+        }
+
+        return original;
+      },
+    });
+  }
 
   locator({
     selector,
@@ -32,13 +90,12 @@ export class Device {
     findStrategy: string;
     textToMatch?: string | RegExp;
   }): AppwrightLocator {
-    return new Locator(
-      this.webDriverClient,
-      this.timeoutOpts,
+    const originalLocator = this.createLocator({
       selector,
       findStrategy,
       textToMatch,
-    );
+    });
+    return this.wrapWithNativeContext(originalLocator);
   }
 
   private vision(): AppwrightVision {
@@ -107,7 +164,7 @@ export class Device {
   @boxedStep
   async tap({ x, y }: { x: number; y: number }) {
     if (this.getPlatform() == Platform.ANDROID) {
-      await this.webDriverClient.executeScript("mobile: clickGesture", [
+      await this.webDriverClient.executeScript('mobile: clickGesture', [
         {
           x: x,
           y: y,
@@ -116,7 +173,7 @@ export class Device {
         },
       ]);
     } else {
-      await this.webDriverClient.executeScript("mobile: tap", [
+      await this.webDriverClient.executeScript('mobile: tap', [
         {
           x: x,
           y: y,
@@ -142,17 +199,14 @@ export class Device {
    * @param options
    * @returns
    */
-  getByText(
-    text: string | RegExp,
-    { exact = false }: { exact?: boolean } = {},
-  ): AppwrightLocator {
+  getByText(text: string | RegExp, { exact = false }: { exact?: boolean } = {}): AppwrightLocator {
     const isAndroid = this.getPlatform() == Platform.ANDROID;
     if (text instanceof RegExp) {
       const substringForContains = longestDeterministicGroup(text);
       if (!substringForContains) {
         return this.locator({
-          selector: "//*",
-          findStrategy: "xpath",
+          selector: '//*',
+          findStrategy: 'xpath',
           textToMatch: text,
         });
       } else {
@@ -161,9 +215,7 @@ export class Device {
           : `label CONTAINS "${substringForContains}"`;
         return this.locator({
           selector: selector,
-          findStrategy: isAndroid
-            ? "-android uiautomator"
-            : "-ios predicate string",
+          findStrategy: isAndroid ? '-android uiautomator' : '-ios predicate string',
           textToMatch: text,
         });
       }
@@ -176,9 +228,7 @@ export class Device {
     }
     return this.locator({
       selector: path,
-      findStrategy: isAndroid
-        ? "-android uiautomator"
-        : "-ios predicate string",
+      findStrategy: isAndroid ? '-android uiautomator' : '-ios predicate string',
       textToMatch: text,
     });
   }
@@ -196,10 +246,7 @@ export class Device {
    * @param options
    * @returns
    */
-  getById(
-    text: string,
-    { exact = false }: { exact?: boolean } = {},
-  ): AppwrightLocator {
+  getById(text: string, { exact = false }: { exact?: boolean } = {}): AppwrightLocator {
     const isAndroid = this.getPlatform() == Platform.ANDROID;
     let path: string;
     if (isAndroid) {
@@ -209,9 +256,7 @@ export class Device {
     }
     return this.locator({
       selector: path,
-      findStrategy: isAndroid
-        ? "-android uiautomator"
-        : "-ios predicate string",
+      findStrategy: isAndroid ? '-android uiautomator' : '-ios predicate string',
       textToMatch: text,
     });
   }
@@ -228,7 +273,7 @@ export class Device {
    * @returns
    */
   getByXpath(xpath: string): AppwrightLocator {
-    return this.locator({ selector: xpath, findStrategy: "xpath" });
+    return this.locator({ selector: xpath, findStrategy: 'xpath' });
   }
 
   /**
@@ -246,30 +291,77 @@ export class Device {
     return isAndroid ? Platform.ANDROID : Platform.IOS;
   }
 
+  async getCurrentBundleId(): Promise<string> {
+    if (this.getPlatform() == Platform.ANDROID) {
+      return await this.webDriverClient.executeScript('mobile: getCurrentPackage', []);
+    }
+    const { bundleId } = await this.webDriverClient.executeScript('mobile: activeAppInfo', []);
+    return bundleId;
+  }
+
+  /**
+   * @param [bundleId] - Optional bundleId of the app to terminate. If not provided, it will attempt to terminate the app under test.
+   * It changes the context to NATIVE_APP after terminating the app.
+   */
   @boxedStep
   async terminateApp(bundleId?: string) {
+    let currentBundleId;
     if (!this.bundleId && !bundleId) {
-      throw new Error("bundleId is required to terminate the app.");
+      currentBundleId = await this.getCurrentBundleId();
+      if (!currentBundleId) throw new Error('bundleId is required to terminate the app.');
     }
-    const keyName =
-      this.getPlatform() == Platform.ANDROID ? "appId" : "bundleId";
-    await this.webDriverClient.executeScript("mobile: terminateApp", [
+    const keyName = this.getPlatform() == Platform.ANDROID ? 'appId' : 'bundleId';
+    await this.webDriverClient.executeScript('mobile: terminateApp', [
+      {
+        [keyName]: bundleId || this.bundleId || currentBundleId,
+      },
+    ]);
+    // Switch to native context after terminating the app so that if the app is re-launched, webview
+    // reads and switches correctly.
+    await this.ensureNativeContext();
+  }
+
+  /**
+   * @param [bundleId] - Optional bundleId of the app to activate. If not provided, it will attempt to activate the app under test.
+   * It changes the context to NATIVE_APP after activating the app.
+   */
+  @boxedStep
+  async activateApp(bundleId?: string) {
+    if (!this.bundleId && !bundleId) {
+      throw new Error('bundleId is required to activate the app.');
+    }
+    const keyName = this.getPlatform() == Platform.ANDROID ? 'appId' : 'bundleId';
+    await this.webDriverClient.executeScript('mobile: activateApp', [
       {
         [keyName]: bundleId || this.bundleId,
       },
     ]);
+    await this.ensureNativeContext();
   }
 
+  /**
+   * Sends the currently running app to the background.
+   *
+   * @param seconds - Number of seconds to keep app in background.
+   *                  Use -1 to background indefinitely (until manually reactivated).
+   *                  If positive number, app returns to foreground after specified seconds.
+   *
+   * @example
+   * ```js
+   * // Background for 10 seconds then auto-return
+   * await device.backgroundApp(10);
+   *
+   * // Background indefinitely (for battery tests)
+   * await device.backgroundApp(-1);
+   * await device.pause(30 * 60 * 1000); // Wait 30 minutes
+   * await device.activateApp(); // Manually bring back
+   * ```
+   */
   @boxedStep
-  async activateApp(bundleId?: string) {
-    if (!this.bundleId && !bundleId) {
-      throw new Error("bundleId is required to activate the app.");
-    }
-    const keyName =
-      this.getPlatform() == Platform.ANDROID ? "appId" : "bundleId";
-    await this.webDriverClient.executeScript("mobile: activateApp", [
+  async backgroundApp(seconds: number = -1): Promise<void> {
+    await this.webDriverClient.executeScript('mobile: backgroundApp', [
       {
-        [keyName]: bundleId || this.bundleId,
+        seconds,
       },
     ]);
   }
@@ -287,24 +379,7 @@ export class Device {
    */
   @boxedStep
   async getClipboardText(): Promise<string> {
-    if (this.getPlatform() == Platform.ANDROID) {
-      return await this.webDriverClient.getClipboard();
-    } else {
-      if (this.provider == "emulator") {
-        // iOS simulator supports clipboard sharing
-        return await this.webDriverClient.getClipboard();
-      } else {
-        if (!this.bundleId) {
-          throw new Error(
-            "bundleId is required to retrieve clipboard data on a real device.",
-          );
-        }
-        await this.activateApp("com.facebook.WebDriverAgentRunner.xctrunner");
-        const clipboardDataBase64 = await this.webDriverClient.getClipboard();
-        await this.activateApp(this.bundleId);
-        return clipboardDataBase64;
-      }
-    }
+    return await this.webDriverClient.executeScript('mobile: getClipboard', []);
   }
 
   /**
@@ -321,24 +396,21 @@ export class Device {
    */
   @boxedStep
   async setMockCameraView(imagePath: string): Promise<void> {
-    if (this.provider == "browserstack") {
+    if (this.provider == 'browserstack') {
       const imageURL = await uploadImageToBS(imagePath);
       await this.webDriverClient.executeScript(
         `browserstack_executor: {"action":"cameraImageInjection", "arguments": {"imageUrl" : "${imageURL}"}}`,
         [],
       );
-    } else if (this.provider == "lambdatest") {
+    } else if (this.provider == 'lambdatest') {
       const imageURL = await uploadImageToLambdaTest(imagePath);
-      await this.webDriverClient.executeScript(
-        `lambda-image-injection=${imageURL}`,
-        [],
-      );
+      await this.webDriverClient.executeScript(`lambda-image-injection=${imageURL}`, []);
     }
   }
 
   @boxedStep
   async pause() {
-    const skipPause = process.env.CI === "true";
+    const skipPause = process.env.CI === 'true';
     if (skipPause) {
       return;
     }
@@ -385,8 +457,14 @@ export class Device {
     // Scrolls from 0.8 to 0.2 of the screen height
     const from = { x: driverSize.width / 2, y: driverSize.height * 0.8 };
     const to = { x: driverSize.width / 2, y: driverSize.height * 0.2 };
-    await this.webDriverClient.executeScript("mobile: dragFromToForDuration", [
-      { duration: 2, fromX: from.x, fromY: from.y, toX: to.x, toY: to.y },
+    await this.webDriverClient.executeScript('mobile: dragFromToForDuration', [
+      {
+        duration: 2,
+        fromX: from.x,
+        fromY: from.y,
+        toX: to.x,
+        toY: to.y,
+      },
     ]);
   }
 
@@ -397,21 +475,74 @@ export class Device {
   @boxedStep
   async sendKeyStrokes(value: string): Promise<void> {
     const actions = value
-      .split("")
+      .split('')
       .map((char) => [
-        { type: "keyDown", value: char },
-        { type: "keyUp", value: char },
+        { type: 'keyDown', value: char },
+        { type: 'keyUp', value: char },
       ])
       .flat();
 
     await this.webDriverClient.performActions([
       {
-        type: "key",
-        id: "keyboard",
+        type: 'key',
+        id: 'keyboard',
         actions: actions,
       },
     ]);
 
     await this.webDriverClient.releaseActions();
+  }
+
+  /**
+   * Get all available contexts (NATIVE_APP and WEBVIEW contexts).
+   * @internal Used internally for automatic context switching
+   */
+  async contexts(): Promise<ReturnType<WebDriverClient['getAppiumContexts']>> {
+    return await this.webDriverClient.getAppiumContexts();
+  }
+
+  /**
+   * Get the current context.
+   * @internal Used internally for automatic context switching
+   */
+  async getCurrentContext(): Promise<string> {
+    const context = await this.webDriverClient.getAppiumContext();
+    const contextName = typeof context === 'string' ? context : context.title;
+    if (!contextName) {
+      throw new Error('Unable to get current context name.');
+    }
+    return contextName;
+  }
+
+  /**
+   * Switch to a specific context by name.
+   * @internal Used internally for automatic context switching
+   */
+  async switchContext(contextName: string): Promise<void> {
+    await this.webDriverClient.switchAppiumContext(contextName);
+  }
+
+  private async switchToNativeContext(): Promise<void> {
+    await this.switchContext('NATIVE_APP');
+  }
+
+  /**
+   * Execute JavaScript code in the current context.
+   *
+   * @param script - JavaScript code to execute (string or function)
+   * @returns Result of the script execution
+   */
+  @boxedStep
+  async evaluate<T = any>(script: string | Function): Promise<T> {
+    const scriptString = typeof script === 'function' ? `return (${script.toString()})()` : script;
+    return await this.webDriverClient.executeScript(scriptString, []);
+  }
+
+  async getWindowHandles(): Promise<string[]> {
+    return await this.webDriverClient.getWindowHandles();
+  }
+
+  async getCurrentWindowHandle(): Promise<string> {
+    return await this.webDriverClient.getWindowHandle();
   }
 }

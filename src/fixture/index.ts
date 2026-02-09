@@ -1,15 +1,20 @@
-import { test as base, FullProject } from "@playwright/test";
-
 import {
-  AppwrightLocator,
-  DeviceProvider,
+  FullProject,
+  test as base,
+} from '@playwright/test';
+
+import { Device } from '../device';
+import { createDeviceProvider } from '../providers';
+import { stopAppiumServer } from '../providers/appium';
+import {
   ActionOptions,
   AppwrightConfig,
-} from "../types";
-import { Device } from "../device";
-import { createDeviceProvider } from "../providers";
-import { WorkerInfoStore } from "./workerInfo";
-import { stopAppiumServer } from "../providers/appium";
+  AppwrightLocator,
+  DeviceProvider,
+  Platform,
+} from '../types';
+import { WebView } from '../webView';
+import { WorkerInfoStore } from './workerInfo';
 
 type TestLevelFixtures = {
   /**
@@ -24,6 +29,13 @@ type TestLevelFixtures = {
    * during the test.
    */
   device: Device;
+
+  /**
+   * The webView instance for interacting with WebView content.
+   * This is only available when your app has a WebView.
+   * Automatically switches to WebView context when using webView methods.
+   */
+  webView: WebView;
 };
 
 type WorkerLevelFixtures = {
@@ -37,24 +49,32 @@ export const test = base.extend<TestLevelFixtures, WorkerLevelFixtures>({
   },
   device: async ({ deviceProvider }, use, testInfo) => {
     const device = await deviceProvider.getDevice();
-    const deviceProviderName = (
-      testInfo.project as FullProject<AppwrightConfig>
-    ).use.device?.provider;
+    const platform = (testInfo.project as FullProject<AppwrightConfig>).use.platform;
+
+    // For Android, activate the app before running the test to ensure it's in the foreground.
+    if (platform === Platform.ANDROID) {
+      try {
+        await device.activateApp();
+      } catch (error) {
+        // Silently ignore activation errors
+        console.log('[Fixture] Failed to activate app:', error);
+      }
+    }
+
+    const deviceProviderName = (testInfo.project as FullProject<AppwrightConfig>).use.device
+      ?.provider;
     testInfo.annotations.push({
-      type: "providerName",
+      type: 'providerName',
       description: deviceProviderName,
     });
     testInfo.annotations.push({
-      type: "sessionId",
+      type: 'sessionId',
       description: deviceProvider.sessionId,
     });
     await deviceProvider.syncTestDetails?.({ name: testInfo.title });
     await use(device);
     await device.close();
-    if (
-      deviceProviderName === "emulator" ||
-      deviceProviderName === "local-device"
-    ) {
+    if (deviceProviderName === 'emulator' || deviceProviderName === 'local-device') {
       await stopAppiumServer();
     }
     await deviceProvider.syncTestDetails?.({
@@ -62,6 +82,10 @@ export const test = base.extend<TestLevelFixtures, WorkerLevelFixtures>({
       status: testInfo.status,
       reason: testInfo.error?.message,
     });
+  },
+  webView: async ({ device }, use) => {
+    const webView = new WebView(device);
+    await use(webView);
   },
   persistentDevice: [
     async ({}, use, workerInfo) => {
@@ -71,10 +95,9 @@ export const test = base.extend<TestLevelFixtures, WorkerLevelFixtures>({
       const device = await deviceProvider.getDevice();
       const sessionId = deviceProvider.sessionId;
       if (!sessionId) {
-        throw new Error("Worker must have a sessionId.");
+        throw new Error('Worker must have a sessionId.');
       }
-      const providerName = (project as FullProject<AppwrightConfig>).use.device
-        ?.provider;
+      const providerName = (project as FullProject<AppwrightConfig>).use.device?.provider;
       const afterSession = new Date();
       const workerInfoStore = new WorkerInfoStore();
       await workerInfoStore.saveWorkerStartTime(
@@ -88,7 +111,7 @@ export const test = base.extend<TestLevelFixtures, WorkerLevelFixtures>({
       await workerInfoStore.saveWorkerEndTime(workerIndex, new Date());
       await device.close();
     },
-    { scope: "worker" },
+    { scope: 'worker' },
   ],
 });
 
@@ -104,9 +127,9 @@ export const expect = test.expect.extend({
   toBeVisible: async (locator: AppwrightLocator, options?: ActionOptions) => {
     const isVisible = await locator.isVisible(options);
     return {
-      message: () => (isVisible ? "" : `Element was not found on the screen`),
+      message: () => (isVisible ? '' : `Element was not found on the screen`),
       pass: isVisible,
-      name: "toBeVisible",
+      name: 'toBeVisible',
       expected: true,
       actual: isVisible,
     };
