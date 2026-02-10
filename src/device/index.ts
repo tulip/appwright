@@ -353,7 +353,7 @@ export class Device {
    *
    * // Background indefinitely (for battery tests)
    * await device.backgroundApp(-1);
-   * await device.pause(30 * 60 * 1000); // Wait 30 minutes
+   * await device.waitForTimeout(30 * 60 * 1000); // Wait 30 minutes
    * await device.activateApp(); // Manually bring back
    * ```
    */
@@ -408,6 +408,18 @@ export class Device {
     }
   }
 
+  /**
+   * **[DEBUGGING ONLY]** Pauses test execution indefinitely to allow manual inspection via Appium Inspector.
+   * 
+   * WARNING: This function runs an infinite loop and will NEVER complete. 
+   * Use only for debugging - remove before committing tests.
+   * Automatically skipped in CI (when CI=true environment variable is set).
+   *
+   * **Usage:**
+   * ```js
+   * await device.pause(); // Pauses here forever - use Ctrl+C to stop
+   * ```
+   */
   @boxedStep
   async pause() {
     const skipPause = process.env.CI === 'true';
@@ -427,6 +439,21 @@ export class Device {
     }
   }
 
+  /**
+   * Waits for the specified amount of time (in milliseconds) before continuing.
+   * 
+   * WARNING: There is a command timeout of 5 minutes for local-device and emulator and a
+   * one minute timeout for all others.
+   * If you wait longer than this without any other commands, the session will timeout.
+   * For long waits, consider breaking them up or using device.backgroundApp() instead.
+   *
+   * **Usage:**
+   * ```js
+   * await device.waitForTimeout(5000); // Wait 5 seconds
+   * ```
+   * 
+   * @param timeout Time to wait in milliseconds
+   */
   @boxedStep
   async waitForTimeout(timeout: number) {
     await new Promise((resolve) => setTimeout(resolve, timeout));
