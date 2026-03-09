@@ -1,15 +1,23 @@
+import retry from 'async-retry';
 // @ts-ignore ts not able to identify the import is just an interface
-import { Client as WebDriverClient } from "webdriver";
-import retry from "async-retry";
+import { Client as WebDriverClient } from 'webdriver';
+
 import {
+  ActionOptions,
   ElementReference,
   ScrollDirection,
   TimeoutOptions,
-  ActionOptions,
   WebDriverErrors,
-} from "../types";
-import { boxedStep } from "../utils";
-import { RetryableError, TimeoutError } from "../types/errors";
+} from '../types';
+import {
+  NonRetryableError,
+  RetryableError,
+  TimeoutError,
+} from '../types/errors';
+import {
+  boxedStep,
+  isNoSuchWindowError,
+} from '../utils';
 
 export class Locator {
   constructor(
@@ -29,13 +37,11 @@ export class Locator {
       const element = await this.getElement();
       if (element) {
         await this.webDriverClient.elementSendKeys(
-          element["element-6066-11e4-a52e-4f735466cecf"],
+          element['element-6066-11e4-a52e-4f735466cecf'],
           value,
         );
       } else {
-        throw new Error(
-          `Failed to fill: Element "${this.selector}" is not found`,
-        );
+        throw new Error(`Failed to fill: Element "${this.selector}" is not found`);
       }
     } else {
       throw new Error(`Failed to fill: Element "${this.selector}" not visible`);
@@ -48,41 +54,35 @@ export class Locator {
     if (isElementDisplayed) {
       const element = await this.getElement();
       if (element) {
-        await this.webDriverClient.elementClick(
-          element["element-6066-11e4-a52e-4f735466cecf"],
-        );
+        await this.webDriverClient.elementClick(element['element-6066-11e4-a52e-4f735466cecf']);
         const actions = value
-          .split("")
+          .split('')
           .map((char) => [
-            { type: "keyDown", value: char },
-            { type: "keyUp", value: char },
+            { type: 'keyDown', value: char },
+            { type: 'keyUp', value: char },
           ])
           .flat();
 
         await this.webDriverClient.performActions([
           {
-            type: "key",
-            id: "keyboard",
+            type: 'key',
+            id: 'keyboard',
             actions: actions,
           },
         ]);
 
         await this.webDriverClient.releaseActions();
       } else {
-        throw new Error(
-          `Failed to sendKeyStrokes: Element "${this.selector}" is not found`,
-        );
+        throw new Error(`Failed to sendKeyStrokes: Element "${this.selector}" is not found`);
       }
     } else {
-      throw new Error(
-        `Failed to sendKeyStrokes: Element "${this.selector}" not visible`,
-      );
+      throw new Error(`Failed to sendKeyStrokes: Element "${this.selector}" not visible`);
     }
   }
 
   async isVisible(options?: ActionOptions): Promise<boolean> {
     try {
-      await this.waitFor("visible", options);
+      await this.waitFor('visible', options);
       return true;
     } catch (err) {
       if (err instanceof TimeoutError) {
@@ -92,30 +92,24 @@ export class Locator {
     }
   }
 
-  async waitFor(
-    state: "attached" | "visible",
-    options?: ActionOptions,
-  ): Promise<void> {
+  async waitFor(state: 'attached' | 'visible', options?: ActionOptions): Promise<void> {
     const timeoutFromConfig = this.timeoutOpts.expectTimeout;
     const timeout = options?.timeout || timeoutFromConfig;
     const result = await this.waitUntil(async () => {
       const element = await this.getElement();
-      if (element && element["element-6066-11e4-a52e-4f735466cecf"]) {
-        if (state === "attached") {
+      if (element && element['element-6066-11e4-a52e-4f735466cecf']) {
+        if (state === 'attached') {
           return true;
-        } else if (state === "visible") {
+        } else if (state === 'visible') {
           try {
             const isDisplayed = await this.webDriverClient.isElementDisplayed(
-              element["element-6066-11e4-a52e-4f735466cecf"],
+              element['element-6066-11e4-a52e-4f735466cecf'],
             );
             return isDisplayed;
           } catch (error) {
             //@ts-ignore
             const errName = error.name;
-            if (
-              errName &&
-              errName.includes(WebDriverErrors.StaleElementReferenceError)
-            ) {
+            if (errName && errName.includes(WebDriverErrors.StaleElementReferenceError)) {
               throw new RetryableError(`Stale element detected: ${error}`);
             }
             throw error;
@@ -135,11 +129,21 @@ export class Locator {
     try {
       return await retry(
         async () => {
-          const result = await fn();
-          if (result === false) {
-            throw new RetryableError(`condition returned false`);
+          try {
+            const result = await fn();
+            if (result === false) {
+              throw new RetryableError(`condition returned false`);
+            }
+            return result as Exclude<ReturnValue, boolean>;
+          } catch (error) {
+            if (isNoSuchWindowError(error)) {
+              throw new NonRetryableError(
+                error instanceof Error ? error.message : String(error),
+                'NoSuchWindowError',
+              );
+            }
+            throw error;
           }
-          return result as Exclude<ReturnValue, boolean>;
         },
         {
           maxRetryTime: timeout,
@@ -150,9 +154,7 @@ export class Locator {
     } catch (err: unknown) {
       if (err instanceof RetryableError) {
         // Last attempt failed, no longer retryable
-        throw new TimeoutError(
-          `waitUntil condition timed out after ${timeout}ms`,
-        );
+        throw new TimeoutError(`waitUntil condition timed out after ${timeout}ms`);
       } else {
         throw err;
       }
@@ -165,9 +167,7 @@ export class Locator {
     if (isElementDisplayed) {
       const element = await this.getElement();
       if (element) {
-        await this.webDriverClient.elementClick(
-          element!["element-6066-11e4-a52e-4f735466cecf"],
-        );
+        await this.webDriverClient.elementClick(element!['element-6066-11e4-a52e-4f735466cecf']);
       } else {
         throw new Error(`Failed to tap: Element "${this.selector}" not found`);
       }
@@ -183,17 +183,13 @@ export class Locator {
       const element = await this.getElement();
       if (element) {
         return await this.webDriverClient.getElementText(
-          element!["element-6066-11e4-a52e-4f735466cecf"],
+          element!['element-6066-11e4-a52e-4f735466cecf'],
         );
       } else {
-        throw new Error(
-          `Failed to getText: Element "${this.selector}" is not found`,
-        );
+        throw new Error(`Failed to getText: Element "${this.selector}" is not found`);
       }
     } else {
-      throw new Error(
-        `Failed to getText: Element "${this.selector}" not visible`,
-      );
+      throw new Error(`Failed to getText: Element "${this.selector}" not visible`);
     }
   }
 
@@ -204,17 +200,17 @@ export class Locator {
       throw new Error(`Failed to scroll: Element "${this.selector}" not found`);
     }
     if (this.webDriverClient.isAndroid) {
-      await this.webDriverClient.executeScript("mobile: scrollGesture", [
+      await this.webDriverClient.executeScript('mobile: scrollGesture', [
         {
-          elementId: element["element-6066-11e4-a52e-4f735466cecf"],
+          elementId: element['element-6066-11e4-a52e-4f735466cecf'],
           direction: direction,
           percent: 1,
         },
       ]);
     } else {
-      await this.webDriverClient.executeScript("mobile: scroll", [
+      await this.webDriverClient.executeScript('mobile: scroll', [
         {
-          elementId: element["element-6066-11e4-a52e-4f735466cecf"],
+          elementId: element['element-6066-11e4-a52e-4f735466cecf'],
           direction: direction,
         },
       ]);
@@ -253,19 +249,13 @@ export class Locator {
     const reversedElements = elements.reverse();
     for (const element of reversedElements) {
       let elementText = await this.webDriverClient.getElementText(
-        element["element-6066-11e4-a52e-4f735466cecf"],
+        element['element-6066-11e4-a52e-4f735466cecf'],
       );
       if (this.textToMatch) {
-        if (
-          this.textToMatch instanceof RegExp &&
-          this.textToMatch.test(elementText)
-        ) {
+        if (this.textToMatch instanceof RegExp && this.textToMatch.test(elementText)) {
           return element;
         }
-        if (
-          typeof this.textToMatch === "string" &&
-          elementText.includes(this.textToMatch!)
-        ) {
+        if (typeof this.textToMatch === 'string' && elementText.includes(this.textToMatch!)) {
           return element;
         }
       } else {

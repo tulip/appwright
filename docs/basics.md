@@ -39,9 +39,11 @@ export default defineConfig({
 
 ## Built-in Fixtures
 
-Appwright provides built-in fixtures like `device`, which offers methods to handle mobile interactions. 
+Appwright provides built-in fixtures to handle mobile interactions:
 
-Here’s an example of how to write a basic test using the `device` fixture:
+### Device Fixture
+
+The `device` fixture offers methods to interact with native mobile app elements.
 
 ```ts
 import { test, expect } from 'appwright';
@@ -55,6 +57,29 @@ test('should display the login screen and tap on Login button', async ({ device 
   await device.getByText('Login').tap();
 });
 ```
+
+### WebView Fixture (Hybrid Apps)
+
+For hybrid mobile apps with WebView content, Appwright provides a `webView` fixture that automatically handles context switching between native and web contexts:
+
+```ts
+import { test, expect } from 'appwright';
+
+test('WebView login test', async ({ device, webView }) => {
+  // Use webView for web content
+  await webView.getByTestId('username').fill('admin');
+  await webView.getByTestId('password').fill('password123');
+  await webView.getByText('Login').tap();
+  
+  // Use familiar assertions
+  await expect(webView.getByText('Welcome')).toBeVisible();
+  
+  // Mix device and webView as needed
+  await device.backgroundApp(-1);
+});
+```
+
+**Note:** Currently supports apps with a single WebView only. The framework automatically connects to the first available WebView context within your app.
 
 ## Run the Test
 

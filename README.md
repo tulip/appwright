@@ -1,6 +1,6 @@
-# Appwright
+# @tulip/appwright
 
-![NPM Version](https://img.shields.io/npm/v/appwright?color=4AC61C)
+> **Note**: This is a fork of [empirical-run/appwright](https://github.com/empirical-run/appwright) maintained by Tulip with additional features including support for hybrid apps and enhanced configuration for local devices and emulators.
 
 Appwright is a test framework for e2e testing of mobile apps. Appwright builds on top of [Appium](https://appium.io/docs/en/latest/), and can
 run tests on local devices, emulators, and remote device farms — for both iOS and Android.
@@ -13,12 +13,12 @@ Appwright exposes an ergonomic API to automate user actions. These actions auto-
 for UI elements to be ready and interactable, which makes your tests easier to read and maintain.
 
 ```ts
-import { test, expect } from "appwright";
+import { test, expect } from 'appwright';
 
-test("User can login", async ({ device }) => {
-  await device.getByText("Username").fill("admin");
-  await device.getByText("Password").fill("password");
-  await device.getByText("Login").tap();
+test('User can login', async ({ device }) => {
+  await device.getByText('Username').fill('admin');
+  await device.getByText('Password').fill('password');
+  await device.getByText('Login').tap();
 });
 ```
 
@@ -28,11 +28,46 @@ Links to help you get started.
 - [Launch blog post](https://www.empirical.run/blog/appwright)
 - [Documentation](#docs)
 
+## Hybrid App Testing (WebView Support)
+
+This fork adds support for testing **hybrid mobile applications** that contain WebView content. The `webView` fixture automatically handles context switching between native and WebView contexts.
+
+**Example:**
+
+```ts
+import { test, expect } from 'appwright';
+
+test('WebView login test', async ({ device, webView }) => {
+  // Automatically switches to WebView context
+  await webView.getByTestId('username').fill('admin');
+  await webView.getByTestId('password').fill('password123');
+  await webView.getByText('Login').tap();
+
+  // Use familiar assertions
+  await expect(webView.getByText('Welcome')).toBeVisible();
+
+  await device.backgroundApp(-1);
+});
+```
+
+### Supported Locators
+
+- `webView.getByTestId()` - Recommended for WebView elements
+- `webView.getByText()` - Find by visible text
+- `webView.css()` - CSS selectors
+- `webView.getByXpath()` - XPath expressions
+- `webView.getByPlaceholder()` - Input placeholder text
+- `webView.evaluate()` - Execute JavaScript in WebView context
+
+### Limitation
+
+Currently supports apps with a **single WebView only**. The framework automatically connects to the first available WebView context within your app.
+
 ## Usage
 
 ### Minimum requirements
 
-- Node 18.20.4 or higher
+- Node 20.19.0 (with the semver range ^20.19.0 || ^22.12.0 || >=24.0.0), as well as the minimum npm version to 10
 
 ### Install
 
@@ -45,27 +80,27 @@ touch appwright.config.ts
 
 ```ts
 // In appwright.config.ts
-import { defineConfig, Platform } from "appwright";
+import { defineConfig, Platform } from 'appwright';
 export default defineConfig({
   projects: [
     {
-      name: "android",
+      name: 'android',
       use: {
         platform: Platform.ANDROID,
         device: {
-          provider: "emulator", // or 'local-device' or 'browserstack'
+          provider: 'emulator', // or 'local-device' or 'browserstack'
         },
-        buildPath: "app-release.apk",
+        buildPath: 'app-release.apk',
       },
     },
     {
-      name: "ios",
+      name: 'ios',
       use: {
         platform: Platform.IOS,
         device: {
-          provider: "emulator", // or 'local-device' or 'browserstack'
+          provider: 'emulator', // or 'local-device' or 'browserstack'
         },
-        buildPath: "app-release.app", // Path to your .app file
+        buildPath: 'app-release.app', // Path to your .app file
       },
     },
   ],
@@ -77,10 +112,22 @@ export default defineConfig({
 - `platform`: The platform you want to test on, such as 'android' or 'ios'.
 
 - `provider`: The device provider where you want to run your tests.
-              You can choose between `browserstack`, `lambdatest`, `emulator`, or `local-device`.
+  You can choose between `browserstack`, `lambdatest`, `emulator`, or `local-device`.
 
 - `buildPath`: The path to your build file. For Android, it should be an APK file.
-               For iOS, if you are running tests on real device, it should be an `.ipa` file. For running tests on an emulator, it should be a `.app` file.
+  For iOS, if you are running tests on real device, it should be an `.ipa` file. For running tests on an emulator, it should be a `.app` file.
+
+#### Local Device & Emulator Specific Options
+
+When using `provider: "local-device"` or `provider: "emulator"`, additional configuration options are available:
+
+- `uninstallAppBeforeTest` _(optional, default: false)_: Set to `true` to completely uninstall the app before starting each test session, ensuring a clean state.
+
+- `preserveAppState` _(optional, default: true)_: Set to `true` to keep the app running and preserve its data between test sessions. Set to `false` to terminate the app and clear its data before each session.
+
+- `updatedWDABundleId` _(optional, iOS only)_: Custom WebDriverAgent bundle ID for iOS local devices. Use this when running a custom-built WebDriverAgent (e.g., 'co.tulip.WebDriverAgentRunner').
+
+See [Configuration](docs/config.md) for detailed documentation and examples.
 
 ### Run tests
 
@@ -166,6 +213,7 @@ To run the tests on iOS simulator:
 ```sh
 npm run extract:app
 ```
+
 - Run the following command:
 
 ```sh

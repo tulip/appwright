@@ -1,58 +1,58 @@
-import { ChildProcess, spawn, exec } from "child_process";
-import path from "path";
-import { Platform } from "../types";
-import { logger } from "../logger";
-import fs from "fs/promises";
-import { promisify } from "util";
-import { getLatestBuildToolsVersions } from "../utils";
+import {
+  ChildProcess,
+  exec,
+  spawn,
+} from 'child_process';
+import fs from 'fs/promises';
+import path from 'path';
+import { promisify } from 'util';
+
+import { logger } from '../logger';
+import { Platform } from '../types';
+import { getLatestBuildToolsVersions } from '../utils';
 
 const execPromise = promisify(exec);
 
 export async function installDriver(driverName: string): Promise<void> {
   // uninstall the driver first to avoid conflicts
   await new Promise((resolve) => {
-    const installProcess = spawn(
-      "npx",
-      ["appium", "driver", "uninstall", driverName],
-      {
-        stdio: "pipe",
-      },
-    );
-    installProcess.on("exit", (code) => {
+    const installProcess = spawn('npx', ['appium', 'driver', 'uninstall', driverName], {
+      stdio: 'pipe',
+    });
+    installProcess.on('exit', (code) => {
       resolve(code);
     });
   });
   // install the driver
   await new Promise((resolve) => {
-    const installProcess = spawn(
-      "npx",
-      ["appium", "driver", "install", driverName],
-      {
-        stdio: "pipe",
-      },
-    );
-    installProcess.on("exit", (code) => {
+    const installProcess = spawn('npx', ['appium', 'driver', 'install', driverName], {
+      stdio: 'pipe',
+    });
+    installProcess.on('exit', (code) => {
       resolve(code);
     });
   });
 }
 
-export async function startAppiumServer(
-  provider: string,
-): Promise<ChildProcess> {
+export async function startAppiumServer(provider: string): Promise<ChildProcess> {
   let emulatorStartRequested = false;
   return new Promise((resolve, reject) => {
-    const appiumProcess = spawn("npx", ["appium"], {
-      stdio: "pipe",
-    });
-    appiumProcess.stderr.on("data", async (data: Buffer) => {
+    // https://github.com/appium/appium-uiautomator2-driver?tab=readme-ov-file#automatic-discovery-of-compatible-chromedriver
+    const appiumProcess = spawn(
+      'npx',
+      ['appium', '--allow-insecure=uiautomator2:chromedriver_autodownload'],
+      {
+        stdio: 'pipe',
+      },
+    );
+    appiumProcess.stderr.on('data', async (data: Buffer) => {
       console.log(data.toString());
     });
-    appiumProcess.stdout.on("data", async (data: Buffer) => {
+    appiumProcess.stdout.on('data', async (data: Buffer) => {
       const output = data.toString();
       console.log(output);
 
-      if (output.includes("Error: listen EADDRINUSE")) {
+      if (output.includes('Error: listen EADDRINUSE')) {
         // TODO: Kill the appium server if it is already running
         logger.error(`Appium: ${data}`);
         throw new Error(
@@ -60,30 +60,30 @@ export async function startAppiumServer(
         );
       }
 
-      if (output.includes("Could not find online devices")) {
-        if (!emulatorStartRequested && provider == "emulator") {
+      if (output.includes('Could not find online devices')) {
+        if (!emulatorStartRequested && provider == 'emulator') {
           emulatorStartRequested = true;
           await startAndroidEmulator();
         }
       }
 
-      if (output.includes("Appium REST http interface listener started")) {
-        logger.log("Appium server is up and running.");
+      if (output.includes('Appium REST http interface listener started')) {
+        logger.log('Appium server is up and running.');
         resolve(appiumProcess);
       }
     });
 
-    appiumProcess.on("error", (error) => {
+    appiumProcess.on('error', (error) => {
       logger.error(`Appium: ${error}`);
       reject(error);
     });
 
-    process.on("exit", () => {
-      logger.log("Main process exiting. Killing Appium server...");
+    process.on('exit', () => {
+      logger.log('Main process exiting. Killing Appium server...');
       appiumProcess.kill();
     });
 
-    appiumProcess.on("close", (code: number) => {
+    appiumProcess.on('close', (code: number) => {
       logger.log(`Appium server exited with code ${code}`);
     });
   });
@@ -96,7 +96,7 @@ export function stopAppiumServer() {
         logger.error(`Error stopping Appium server: ${error.message}`);
         reject(error);
       }
-      logger.log("Appium server stopped successfully.");
+      logger.log('Appium server stopped successfully.');
       resolve(stdout);
     });
   });
@@ -107,7 +107,7 @@ export function isEmulatorInstalled(platform: Platform): Promise<boolean> {
     if (platform == Platform.ANDROID) {
       const androidHome = process.env.ANDROID_HOME;
 
-      const emulatorPath = path.join(androidHome!, "emulator", "emulator");
+      const emulatorPath = path.join(androidHome!, 'emulator', 'emulator');
       exec(`${emulatorPath} -list-avds`, (error, stdout, stderr) => {
         if (error) {
           throw new Error(
@@ -119,11 +119,10 @@ Follow this guide to install emulators: https://community.neptune-software.com/t
           logger.error(`Emulator: ${stderr}`);
         }
 
-        const lines = stdout.trim().split("\n");
+        const lines = stdout.trim().split('\n');
 
         const deviceNames = lines.filter(
-          (line) =>
-            line.trim() && !line.startsWith("INFO") && !line.includes("/tmp/"),
+          (line) => line.trim() && !line.startsWith('INFO') && !line.includes('/tmp/'),
         );
 
         if (deviceNames.length > 0) {
@@ -143,7 +142,7 @@ export async function startAndroidEmulator(): Promise<void> {
   return new Promise((resolve, reject) => {
     const androidHome = process.env.ANDROID_HOME;
 
-    const emulatorPath = path.join(androidHome!, "emulator", "emulator");
+    const emulatorPath = path.join(androidHome!, 'emulator', 'emulator');
 
     exec(`${emulatorPath} -list-avds`, (error, stdout, stderr) => {
       if (error) {
@@ -155,12 +154,11 @@ export async function startAndroidEmulator(): Promise<void> {
         logger.error(`Emulator: ${stderr}`);
       }
 
-      const lines = stdout.trim().split("\n");
+      const lines = stdout.trim().split('\n');
 
       // Filter out lines that do not contain device names
       const deviceNames = lines.filter(
-        (line) =>
-          line.trim() && !line.startsWith("INFO") && !line.includes("/tmp/"),
+        (line) => line.trim() && !line.startsWith('INFO') && !line.includes('/tmp/'),
       );
 
       if (deviceNames.length === 0) {
@@ -173,92 +171,122 @@ export async function startAndroidEmulator(): Promise<void> {
 
       const emulatorToStart = deviceNames[0];
 
-      const emulatorProcess = spawn(emulatorPath, ["-avd", emulatorToStart!], {
-        stdio: "pipe",
+      const emulatorProcess = spawn(emulatorPath, ['-avd', emulatorToStart!], {
+        stdio: 'pipe',
       });
 
-      emulatorProcess.stdout?.on("data", (data) => {
+      emulatorProcess.stdout?.on('data', (data) => {
         logger.log(`Emulator: ${data}`);
 
         if (data.includes("Successfully loaded snapshot 'default_boot'")) {
-          logger.log("Emulator started successfully.");
+          logger.log('Emulator started successfully.');
           resolve();
         }
       });
 
-      emulatorProcess.on("error", (err) => {
+      emulatorProcess.on('error', (err) => {
         logger.error(`Emulator: ${err.message}`);
         reject(`Failed to start emulator: ${err.message}`);
       });
 
-      emulatorProcess.on("close", (code) => {
+      emulatorProcess.on('close', (code) => {
         if (code !== 0) {
           reject(`Emulator process exited with code: ${code}`);
         }
       });
 
       // Ensure the emulator process is killed when the main process exits
-      process.on("exit", () => {
-        logger.log("Main process exiting. Killing the emulator process...");
+      process.on('exit', () => {
+        logger.log('Main process exiting. Killing the emulator process...');
         emulatorProcess.kill();
       });
     });
   });
 }
 
-export function getAppBundleId(path: string): Promise<string> {
+export function getAppBundleId(filePath: string): Promise<string> {
   return new Promise((resolve, reject) => {
-    const command = `osascript -e 'id of app "${path}"'`;
+    let command: string;
+
+    const absolutePath = path.resolve(filePath);
+
+    if (filePath.endsWith('.ipa')) {
+      // Stream Info.plist from ZIP to plutil
+      command = `unzip -p "${absolutePath}" "Payload/*.app/Info.plist" | plutil -convert xml1 -o - - | grep -A1 "CFBundleIdentifier" | grep string | sed 's/<[^>]*>//g'`;
+    } else if (filePath.endsWith('.app')) {
+      // Use plutil -extract for .app folders
+      const plistPath = path.join(absolutePath, 'Info.plist');
+      command = `plutil -extract CFBundleIdentifier raw "${plistPath}"`;
+    } else {
+      return reject(new Error('Unsupported file type. Use .app or .ipa'));
+    }
+
     exec(command, (error, stdout, stderr) => {
-      if (error) {
-        logger.error("osascript:", error.message);
-        return reject(error);
-      }
-      if (stderr) {
-        logger.error(`osascript: ${stderr}`);
-        return reject(new Error(stderr));
-      }
+      if (error) return reject(new Error(`Failed to get ID: ${error.message} : ${stderr}`));
       const bundleId = stdout.trim();
-      if (bundleId) {
-        resolve(bundleId);
-      } else {
-        reject(new Error("Bundle ID not found"));
-      }
+      bundleId ? resolve(bundleId) : reject(new Error('Bundle ID empty'));
     });
   });
 }
 
-export async function getConnectedIOSDeviceUDID(): Promise<string> {
+export async function getConnectedIOSDeviceUDID(deviceName?: string): Promise<string> {
   try {
     const { stdout } = await execPromise(`xcrun xctrace list devices`);
+    const lines = stdout.split('\n');
 
-    const iphoneDevices = stdout
-      .split("\n")
-      .filter((line) => line.includes("iPhone"));
+    const realDevices: Array<{ name: string; udid: string }> = [];
+    let inDevicesSection = false;
 
-    const realDevices = iphoneDevices.filter(
-      (line) => !line.includes("Simulator"),
-    );
+    for (const line of lines) {
+      // Start of "== Devices ==" section (online devices only)
+      if (line.includes('== Devices ==')) {
+        inDevicesSection = true;
+        continue;
+      }
 
-    if (!realDevices.length) {
+      // Stop when we hit another section
+      if (line.includes('==') && inDevicesSection) {
+        break;
+      }
+
+      // Only process lines in the Devices section
+      if (!inDevicesSection) {
+        continue;
+      }
+
+      // the output from above looks like this: User’s iPhone (18.0) (00003110-002A304e3A53C41E)
+      // where `00003110-000A304e3A53C41E` is the UDID of the device
+      const match = line.match(/^(.+?)\s+\([\d.]+\)(?:\s+-\s+\w+)?\s+\(([0-9A-Fa-f-]+)\)\s*$/);
+
+      if (match) {
+        const name = match[1]!.trim();
+        const udid = match[2]!;
+
+        realDevices.push({ name, udid });
+      }
+    }
+
+    if (realDevices.length === 0) {
       throw new Error(
-        `No connected iPhone detected. Please ensure your device is connected and try again.`,
+        `No connected iOS devices detected. Please ensure your device is connected and try again.`,
       );
     }
 
-    const deviceLine = realDevices[0];
-    //the output from above looks like this: User’s iPhone (18.0) (00003110-002A304e3A53C41E)
-    //where `00003110-000A304e3A53C41E` is the UDID of the device
-    const matches = deviceLine!.match(/\(([\da-fA-F-]+)\)$/);
-
-    if (matches && matches[1]) {
-      return matches[1];
-    } else {
-      throw new Error(
-        `Please check your iPhone device connection. 
-To check for connected devices run "xcrun xctrace list devices | grep iPhone | grep -v Simulator"`,
-      );
+    // If deviceName provided, find exact match
+    if (deviceName) {
+      const device = realDevices.find((d) => d.name === deviceName);
+      if (!device) {
+        throw new Error(
+          `No iOS device found with name "${deviceName}". Available devices: ${realDevices
+            .map((d) => d.name)
+            .join(', ')}`,
+        );
+      }
+      return device.udid;
     }
+
+    // Return first available device
+    return realDevices[0]!.udid;
   } catch (error) {
     //@ts-ignore
     throw new Error(`getConnectedIOSDeviceUDID: ${error.message}`);
@@ -267,11 +295,11 @@ To check for connected devices run "xcrun xctrace list devices | grep iPhone | g
 
 export async function getActiveAndroidDevices(): Promise<number> {
   try {
-    const { stdout } = await execPromise("adb devices");
+    const { stdout } = await execPromise('adb devices');
 
-    const lines = stdout.trim().split("\n");
+    const lines = stdout.trim().split('\n');
 
-    const deviceLines = lines.filter((line) => line.includes("\tdevice"));
+    const deviceLines = lines.filter((line) => line.includes('\tdevice'));
 
     return deviceLines.length;
   } catch (error) {
@@ -283,13 +311,11 @@ export async function getActiveAndroidDevices(): Promise<number> {
 }
 async function getLatestBuildToolsVersion(): Promise<string | undefined> {
   const androidHome = process.env.ANDROID_HOME;
-  const buildToolsPath = path.join(androidHome!, "build-tools");
+  const buildToolsPath = path.join(androidHome!, 'build-tools');
   try {
     const files = await fs.readdir(buildToolsPath);
 
-    const versions = files.filter((file) =>
-      /^\d+\.\d+\.\d+(-rc\d+)?$/.test(file),
-    );
+    const versions = files.filter((file) => /^\d+\.\d+\.\d+(-rc\d+)?$/.test(file));
 
     if (versions.length === 0) {
       throw new Error(
@@ -319,12 +345,7 @@ export async function getApkDetails(buildPath: string): Promise<{
     );
   }
 
-  const aaptPath = path.join(
-    androidHome!,
-    "build-tools",
-    buildToolsVersion!,
-    "aapt",
-  );
+  const aaptPath = path.join(androidHome!, 'build-tools', buildToolsVersion!, 'aapt');
   const command = `${aaptPath} dump badging ${buildPath}`;
 
   try {

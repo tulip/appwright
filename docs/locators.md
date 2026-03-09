@@ -95,5 +95,81 @@ const isVisible = await device.getByText('Playwright').isVisible();
 To scroll the screen, you can use the `scroll` method.
 
 ```ts
-await device.getByText("Playwright").scroll(ScrollDirection.DOWN);
+await device.getByText('Playwright').scroll(ScrollDirection.DOWN);
 ```
+
+## WebView Locators (Hybrid Apps)
+
+When testing hybrid apps with web content, use the `webView` fixture which provides web-specific locators:
+
+### Get an element by Test ID
+
+The recommended way to select WebView elements is by using the `data-testid` attribute.
+
+```ts
+await webView.getByTestId('submit-button').tap();
+await webView.getByTestId('username-input').fill('admin');
+```
+
+### Get an element by Text
+
+Select elements by their visible text content.
+
+```ts
+await webView.getByText('Welcome').tap();
+await webView.getByText('Submit', { exact: true }).tap();
+```
+
+You can also use RegExp patterns:
+
+```ts
+await webView.getByText(/Welcome.*/);
+```
+
+### Get an element by CSS Selector
+
+Use CSS selectors for complex queries.
+
+```ts
+await webView.css('.login-form input[name="email"]').fill('test@example.com');
+await webView.css('#submit-btn').tap();
+await webView.css('form > button[type="submit"]').tap();
+```
+
+### Get an element by XPath
+
+Use XPath expressions when CSS selectors cannot express the query.
+
+```ts
+await webView.getByXpath('//button[@type="submit"]').tap();
+await webView.getByXpath('//div[@class="form"]//input[@name="email"]').fill('test@example.com');
+```
+
+### Get an element by Placeholder
+
+Select input elements by their placeholder text.
+
+```ts
+await webView.getByPlaceholder('Enter your email').fill('test@example.com');
+await webView.getByPlaceholder('Search').fill('query');
+```
+
+### Execute JavaScript in WebView
+
+Execute JavaScript code directly in the WebView context.
+
+```ts
+// Get page title
+const title = await webView.evaluate(() => document.title);
+
+// Scroll to bottom
+await webView.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+
+// Get computed style
+const color = await webView.evaluate(() => {
+  const el = document.querySelector('.header');
+  return window.getComputedStyle(el).color;
+});
+```
+
+**Note:** Currently supports apps with a single WebView only.

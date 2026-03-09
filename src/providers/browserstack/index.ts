@@ -1,15 +1,17 @@
-import retry from "async-retry";
-import fs from "fs";
-import FormData from "form-data";
-import path from "path";
+import retry from 'async-retry';
+import FormData from 'form-data';
+import fs from 'fs';
+import path from 'path';
+
+import { FullProject } from '@playwright/test';
+
+import { Device } from '../../device';
+import { logger } from '../../logger';
 import {
   AppwrightConfig,
-  DeviceProvider,
   BrowserStackConfig,
-} from "../../types";
-import { FullProject } from "@playwright/test";
-import { Device } from "../../device";
-import { logger } from "../../logger";
+  DeviceProvider,
+} from '../../types';
 
 type BrowserStackSessionDetails = {
   name: string;
@@ -35,7 +37,7 @@ type BrowserStackSessionDetails = {
   };
 };
 
-const API_BASE_URL = "https://api-cloud.browserstack.com/app-automate";
+const API_BASE_URL = 'https://api-cloud.browserstack.com/app-automate';
 
 const envVarKeyForBuild = (projectName: string) =>
   `BROWSERSTACK_APP_URL_${projectName.toUpperCase()}`;
@@ -43,13 +45,13 @@ const envVarKeyForBuild = (projectName: string) =>
 function getAuthHeader() {
   const userName = process.env.BROWSERSTACK_USERNAME;
   const accessKey = process.env.BROWSERSTACK_ACCESS_KEY;
-  const key = Buffer.from(`${userName}:${accessKey}`).toString("base64");
+  const key = Buffer.from(`${userName}:${accessKey}`).toString('base64');
   return `Basic ${key}`;
 }
 
 async function getSessionDetails(sessionId: string) {
   const response = await fetch(`${API_BASE_URL}/sessions/${sessionId}.json`, {
-    method: "GET",
+    method: 'GET',
     headers: {
       Authorization: getAuthHeader(),
     },
@@ -66,36 +68,25 @@ export class BrowserStackDeviceProvider implements DeviceProvider {
   sessionId?: string;
   private project: FullProject<AppwrightConfig>;
 
-  constructor(
-    project: FullProject<AppwrightConfig>,
-    appBundleId: string | undefined,
-  ) {
+  constructor(project: FullProject<AppwrightConfig>, appBundleId: string | undefined) {
     this.project = project;
     if (appBundleId) {
-      logger.log(
-        `Bundle id is specified (${appBundleId}) but ignored for BrowserStack provider.`,
-      );
+      logger.log(`Bundle id is specified (${appBundleId}) but ignored for BrowserStack provider.`);
     }
   }
 
   async globalSetup() {
     if (!this.project.use.buildPath) {
-      throw new Error(
-        `Build path not found. Please set the build path in the config file.`,
-      );
+      throw new Error(`Build path not found. Please set the build path in the config file.`);
     }
-    if (
-      !(
-        process.env.BROWSERSTACK_USERNAME && process.env.BROWSERSTACK_ACCESS_KEY
-      )
-    ) {
+    if (!(process.env.BROWSERSTACK_USERNAME && process.env.BROWSERSTACK_ACCESS_KEY)) {
       throw new Error(
-        "BROWSERSTACK_USERNAME and BROWSERSTACK_ACCESS_KEY are required environment variables for this device provider.",
+        'BROWSERSTACK_USERNAME and BROWSERSTACK_ACCESS_KEY are required environment variables for this device provider.',
       );
     }
     const buildPath = this.project.use.buildPath!;
-    const isHttpUrl = buildPath.startsWith("http");
-    const isBrowserStackUrl = buildPath.startsWith("bs://");
+    const isHttpUrl = buildPath.startsWith('http');
+    const isBrowserStackUrl = buildPath.startsWith('bs://');
     let appUrl: string | undefined = undefined;
     if (isBrowserStackUrl) {
       appUrl = buildPath;
@@ -114,21 +105,21 @@ export class BrowserStackDeviceProvider implements DeviceProvider {
           throw new Error(`Build file not found: ${buildPath}`);
         }
         const form = new FormData();
-        form.append("file", fs.createReadStream(buildPath));
+        form.append('file', fs.createReadStream(buildPath));
         headers = { ...headers, ...form.getHeaders() };
         body = form;
       }
-      const fetch = (await import("node-fetch")).default;
+      const fetch = (await import('node-fetch')).default;
       logger.log(`Uploading: ${buildPath}`);
       const response = await fetch(`${API_BASE_URL}/upload`, {
-        method: "POST",
+        method: 'POST',
         headers,
         body,
       });
       const data = await response.json();
       appUrl = (data as any).app_url;
       if (!appUrl) {
-        logger.error("Uploading the build failed:", data);
+        logger.error('Uploading the build failed:', data);
       }
     }
     process.env[envVarKeyForBuild(this.project.name)] = appUrl;
@@ -143,26 +134,19 @@ export class BrowserStackDeviceProvider implements DeviceProvider {
   private validateConfig() {
     const device = this.project.use.device as BrowserStackConfig;
     if (!device.name || !device.osVersion) {
-      throw new Error(
-        "Device name and osVersion are required for running tests on BrowserStack",
-      );
+      throw new Error('Device name and osVersion are required for running tests on BrowserStack');
     }
   }
 
   private async createDriver(config: any): Promise<Device> {
-    const WebDriver = (await import("webdriver")).default;
+    const WebDriver = (await import('webdriver')).default;
     const webDriverClient = await WebDriver.newSession(config);
     this.sessionId = webDriverClient.sessionId;
     const bundleId = await this.getAppBundleIdFromSession();
     const testOptions = {
       expectTimeout: this.project.use.expectTimeout!,
     };
-    return new Device(
-      webDriverClient,
-      bundleId,
-      testOptions,
-      this.project.use.device?.provider!,
-    );
+    return new Device(webDriverClient, bundleId, testOptions, this.project.use.device?.provider!);
   }
 
   private async getSessionDetails() {
@@ -172,7 +156,7 @@ export class BrowserStackDeviceProvider implements DeviceProvider {
 
   private async getAppBundleIdFromSession(): Promise<string> {
     await this.getSessionDetails();
-    return this.sessionDetails?.app_details.app_name ?? "";
+    return this.sessionDetails?.app_details.app_name ?? '';
   }
 
   static async downloadVideo(
@@ -204,17 +188,15 @@ export class BrowserStackDeviceProvider implements DeviceProvider {
         await retry(
           async () => {
             const response = await fetch(videoURL, {
-              method: "GET",
+              method: 'GET',
             });
             if (response.status !== 200) {
               // Retry if not 200
-              throw new Error(
-                `Video not found: ${response.status} (URL: ${videoURL})`,
-              );
+              throw new Error(`Video not found: ${response.status} (URL: ${videoURL})`);
             }
             const reader = response.body?.getReader();
             if (!reader) {
-              throw new Error("Failed to get reader from response body.");
+              throw new Error('Failed to get reader from response body.');
             }
             const streamToFile = async () => {
               // eslint-disable-next-line no-constant-condition
@@ -231,28 +213,27 @@ export class BrowserStackDeviceProvider implements DeviceProvider {
             retries: 10,
             minTimeout: 3_000,
             onRetry: (err, i) => {
+              const message = err instanceof Error ? err.message : String(err);
               if (i > 5) {
-                logger.warn(`Retry attempt ${i} failed: ${err.message}`);
+                logger.warn(`Retry attempt ${i} failed: ${message}`);
               }
             },
           },
         );
         return new Promise((resolve, reject) => {
           // Ensure file stream is closed even in case of an error
-          fileStream.on("finish", () => {
+          fileStream.on('finish', () => {
             try {
               fs.renameSync(tempPathForWriting, pathToTestVideo);
-              logger.log(
-                `Download finished and file closed: ${pathToTestVideo}`,
-              );
-              resolve({ path: pathToTestVideo, contentType: "video/mp4" });
+              logger.log(`Download finished and file closed: ${pathToTestVideo}`);
+              resolve({ path: pathToTestVideo, contentType: 'video/mp4' });
             } catch (err) {
               logger.error(`Failed to rename file: `, err);
               reject(err);
             }
           });
 
-          fileStream.on("error", (err) => {
+          fileStream.on('error', (err) => {
             logger.error(`Failed to write file: ${err.message}`);
             reject(err);
           });
@@ -266,29 +247,22 @@ export class BrowserStackDeviceProvider implements DeviceProvider {
     }
   }
 
-  async syncTestDetails(details: {
-    status?: string;
-    reason?: string;
-    name?: string;
-  }) {
-    const response = await fetch(
-      `${API_BASE_URL}/sessions/${this.sessionId}.json`,
-      {
-        method: "PUT",
-        headers: {
-          Authorization: getAuthHeader(),
-          "Content-Type": "application/json",
-        },
-        body: details.status
-          ? JSON.stringify({
-              status: details.status,
-              reason: details.reason,
-            })
-          : JSON.stringify({
-              name: details.name,
-            }),
+  async syncTestDetails(details: { status?: string; reason?: string; name?: string }) {
+    const response = await fetch(`${API_BASE_URL}/sessions/${this.sessionId}.json`, {
+      method: 'PUT',
+      headers: {
+        Authorization: getAuthHeader(),
+        'Content-Type': 'application/json',
       },
-    );
+      body: details.status
+        ? JSON.stringify({
+            status: details.status,
+            reason: details.reason,
+          })
+        : JSON.stringify({
+            name: details.name,
+          }),
+    });
     if (!response.ok) {
       throw new Error(`Error setting session details: ${response.statusText}`);
     }
@@ -302,27 +276,24 @@ export class BrowserStackDeviceProvider implements DeviceProvider {
     const projectName = path.basename(process.cwd());
     const envVarKey = envVarKeyForBuild(this.project.name);
     if (!process.env[envVarKey]) {
-      throw new Error(
-        `process.env.${envVarKey} is not set. Did the file upload work?`,
-      );
+      throw new Error(`process.env.${envVarKey} is not set. Did the file upload work?`);
     }
     return {
       port: 443,
-      path: "/wd/hub",
-      protocol: "https",
-      logLevel: "warn",
+      path: '/wd/hub',
+      protocol: 'https',
+      logLevel: 'warn',
       user: process.env.BROWSERSTACK_USERNAME,
       key: process.env.BROWSERSTACK_ACCESS_KEY,
-      hostname: "hub.browserstack.com",
+      hostname: 'hub.browserstack.com',
       capabilities: {
-        "bstack:options": {
+        'bstack:options': {
           debug: true,
           interactiveDebugging: true,
           networkLogs: true,
-          appiumVersion: "2.6.0",
-          enableCameraImageInjection: (
-            this.project.use.device as BrowserStackConfig
-          )?.enableCameraImageInjection,
+          appiumVersion: '2.6.0',
+          enableCameraImageInjection: (this.project.use.device as BrowserStackConfig)
+            ?.enableCameraImageInjection,
           idleTimeout: 180,
           deviceName: this.project.use.device?.name,
           osVersion: (this.project.use.device as BrowserStackConfig).osVersion,
@@ -331,15 +302,15 @@ export class BrowserStackDeviceProvider implements DeviceProvider {
           buildName: `${projectName} ${platformName}`,
           sessionName: `${projectName} ${platformName} test`,
           buildIdentifier:
-            process.env.GITHUB_ACTIONS === "true"
+            process.env.GITHUB_ACTIONS === 'true'
               ? `CI ${process.env.GITHUB_RUN_ID}`
               : process.env.USER,
         },
-        "appium:autoGrantPermissions": true,
-        "appium:app": process.env[envVarKey],
-        "appium:autoAcceptAlerts": true,
-        "appium:fullReset": true,
-        "appium:settings[snapshotMaxDepth]": 62,
+        'appium:autoGrantPermissions': true,
+        'appium:app': process.env[envVarKey],
+        'appium:autoAcceptAlerts': true,
+        'appium:fullReset': true,
+        'appium:settings[snapshotMaxDepth]': 62,
       },
     };
   }
