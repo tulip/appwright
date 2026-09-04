@@ -138,6 +138,10 @@ npx appwright test --project android
 npx appwright test --project ios
 ```
 
+To run on several local devices or emulators at once, list them under `device.devices` in the
+project config and raise `workers` up to that number; each Playwright worker then drives its own
+device. See [Running on multiple local devices](docs/config.md#running-on-multiple-local-devices).
+
 #### Run tests on BrowserStack
 
 Appwright supports BrowserStack out of the box. To run tests on BrowserStack, configure
