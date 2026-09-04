@@ -10,19 +10,24 @@ import {
   TimeoutOptions,
 } from '../../types';
 import { validateBuildPath } from '../../utils';
+import { getApkDetails, getAppBundleId, isAppiumHealthy } from '../appium';
 import {
-  getApkDetails,
-  getAppBundleId,
-  installDriver,
-  isEmulatorInstalled,
-  startAppiumServer,
-} from '../appium';
+  getAppiumPort,
+  getDeviceEntryForSlot,
+  getSlotCapabilities,
+  resolveDeviceEntries,
+} from '../slots';
+import { ensureEmulatorsBooted, isDeviceOnline, listAvds } from './boot';
 
 export class EmulatorProvider implements DeviceProvider {
   sessionId?: string;
   private cachedPackageName?: string;
 
-  constructor(private project: FullProject<AppwrightConfig>, appBundleId: string | undefined) {
+  constructor(
+    private project: FullProject<AppwrightConfig>,
+    appBundleId: string | undefined,
+    private slot: number = 0,
+  ) {
     if (appBundleId) {
       logger.log(`Bundle id is specified (${appBundleId}) but ignored for Emulator provider.`);
     }
@@ -32,21 +37,21 @@ export class EmulatorProvider implements DeviceProvider {
     return await this.createDriver();
   }
 
-  async globalSetup() {
-    validateBuildPath(
-      this.project.use.buildPath,
-      this.project.use.platform == Platform.ANDROID ? '.apk' : '.app',
-    );
+  async globalSetup(options?: { workers: number }) {
+    const platform = this.project.use.platform!;
+    const deviceConfig = this.project.use.device as EmulatorConfig;
 
-    if (this.project.use.platform == Platform.ANDROID) {
+    validateBuildPath(this.project.use.buildPath, platform == Platform.ANDROID ? '.apk' : '.app');
+
+    if (platform == Platform.ANDROID) {
       const androidHome = process.env.ANDROID_HOME;
       const androidSimulatorConfigDocLink =
         'https://github.com/empirical-run/appwright/blob/main/docs/config.md#android-emulator';
       if (!androidHome) {
         throw new Error(
-          `The ANDROID_HOME environment variable is not set. 
+          `The ANDROID_HOME environment variable is not set.
 This variable is required to locate your Android SDK.
-Please set it to the correct path of your Android SDK installation. 
+Please set it to the correct path of your Android SDK installation.
 Follow the steps mentioned in ${androidSimulatorConfigDocLink} to run test on Android emulator.`,
         );
       }
@@ -54,22 +59,46 @@ Follow the steps mentioned in ${androidSimulatorConfigDocLink} to run test on An
       const javaHome = process.env.JAVA_HOME;
       if (!javaHome) {
         throw new Error(
-          `The JAVA_HOME environment variable is not set.  
+          `The JAVA_HOME environment variable is not set.
 Follow the steps mentioned in ${androidSimulatorConfigDocLink} to run test on Android emulator.`,
         );
       }
 
-      await isEmulatorInstalled(this.project.use.platform);
+      // Throws with installation guidance when no AVDs exist.
+      await listAvds();
+    }
+
+    // Boot one emulator/simulator per worker slot. With no `devices`/`udid` configured this is
+    // empty and the Appium driver picks a running emulator itself (legacy behaviour).
+    const entries = resolveDeviceEntries(deviceConfig).slice(0, options?.workers ?? 1);
+
+    if (platform == Platform.ANDROID) {
+      for (const entry of entries) {
+        if (!entry.avd && !(await isDeviceOnline(platform, entry.udid))) {
+          throw new Error(
+            `Emulator "${entry.udid}" is not running and has no \`avd\` configured, so Appwright ` +
+              'cannot boot it. Either add `avd: "<name>"` to this entry in `device.devices` ' +
+              '(see `emulator -list-avds`) or boot the emulator manually before running tests.',
+          );
+        }
+      }
+    }
+
+    if (entries.length > 0) {
+      await ensureEmulatorsBooted(platform, entries);
     }
   }
 
   private async createDriver(): Promise<Device> {
-    await installDriver(
-      this.project.use.platform == Platform.ANDROID ? 'uiautomator2' : 'xcuitest',
-    );
-    await startAppiumServer(this.project.use.device?.provider!);
+    const config = await this.createConfig();
+    if (!(await isAppiumHealthy(config.port))) {
+      throw new Error(
+        `Appium server on port ${config.port} is not responding. The shared server started by ` +
+          'globalSetup may have crashed; check the Appium logs above.',
+      );
+    }
     const WebDriver = (await import('webdriver')).default;
-    const webDriverClient = await WebDriver.newSession(await this.createConfig());
+    const webDriverClient = await WebDriver.newSession(config);
     this.sessionId = webDriverClient.sessionId;
 
     let bundleId: string;
@@ -87,8 +116,8 @@ Follow the steps mentioned in ${androidSimulatorConfigDocLink} to run test on An
   }
 
   private async createConfig() {
-    const platformName = this.project.use.platform;
-    const udid = (this.project.use.device as EmulatorConfig).udid;
+    const platformName = this.project.use.platform!;
+    const deviceConfig = this.project.use.device as EmulatorConfig;
     let appPackageName: string | undefined;
     let appLaunchableActivity: string | undefined;
 
@@ -98,13 +127,19 @@ Follow the steps mentioned in ${androidSimulatorConfigDocLink} to run test on An
       appLaunchableActivity = launchableActivity!;
       this.cachedPackageName = packageName;
     }
+
+    // Device for this worker slot. `undefined` only when nothing is configured and slot is 0
+    // (legacy behaviour: no udid is passed and the Appium driver picks a running emulator).
+    const entry = getDeviceEntryForSlot(deviceConfig, this.slot);
+    const udid = entry?.udid;
+
     return {
-      port: 4723,
+      port: getAppiumPort(),
       capabilities: {
         'appium:deviceName': this.project.use.device?.name,
         'appium:udid': udid,
         'appium:automationName': platformName == Platform.ANDROID ? 'uiautomator2' : 'xcuitest',
-        'appium:platformVersion': (this.project.use.device as EmulatorConfig).osVersion,
+        'appium:platformVersion': deviceConfig.osVersion,
         'appium:appActivity': appLaunchableActivity,
         'appium:appPackage': appPackageName,
         platformName: platformName,
@@ -114,11 +149,13 @@ Follow the steps mentioned in ${androidSimulatorConfigDocLink} to run test on An
         'appium:deviceOrientation': this.project.use.device?.orientation,
         'appium:settings[snapshotMaxDepth]': 62,
 
-        'appium:fullReset':
-          (this.project.use.device as EmulatorConfig).uninstallAppBeforeTest ?? false,
-        'appium:noReset': (this.project.use.device as EmulatorConfig).preserveAppState ?? true,
+        'appium:fullReset': deviceConfig.uninstallAppBeforeTest ?? false,
+        'appium:noReset': deviceConfig.preserveAppState ?? true,
 
         'appium:newCommandTimeout': 300,
+
+        // Ports/paths that must be unique per concurrent session on this host.
+        ...getSlotCapabilities(platformName, this.slot),
 
         ...(platformName == Platform.IOS && {
           'appium:wdaLaunchTimeout': 600_000,

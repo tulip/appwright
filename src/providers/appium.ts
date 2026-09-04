@@ -1,237 +1,228 @@
 import {
   ChildProcess,
   exec,
+  execFile,
   spawn,
 } from 'child_process';
 import fs from 'fs/promises';
+import net from 'net';
 import path from 'path';
 import { promisify } from 'util';
 
 import { logger } from '../logger';
-import { Platform } from '../types';
 import { getLatestBuildToolsVersions } from '../utils';
 
 const execPromise = promisify(exec);
-
-export async function installDriver(driverName: string): Promise<void> {
-  // uninstall the driver first to avoid conflicts
-  await new Promise((resolve) => {
-    const installProcess = spawn('npx', ['appium', 'driver', 'uninstall', driverName], {
-      stdio: 'pipe',
-    });
-    installProcess.on('exit', (code) => {
-      resolve(code);
-    });
-  });
-  // install the driver
-  await new Promise((resolve) => {
-    const installProcess = spawn('npx', ['appium', 'driver', 'install', driverName], {
-      stdio: 'pipe',
-    });
-    installProcess.on('exit', (code) => {
-      resolve(code);
-    });
-  });
-}
-
-export async function startAppiumServer(provider: string): Promise<ChildProcess> {
-  let emulatorStartRequested = false;
-  return new Promise((resolve, reject) => {
-    // https://github.com/appium/appium-uiautomator2-driver?tab=readme-ov-file#automatic-discovery-of-compatible-chromedriver
-    const appiumProcess = spawn(
-      'npx',
-      ['appium', '--allow-insecure=uiautomator2:chromedriver_autodownload'],
-      {
-        stdio: 'pipe',
-      },
-    );
-    appiumProcess.stderr.on('data', async (data: Buffer) => {
-      console.log(data.toString());
-    });
-    appiumProcess.stdout.on('data', async (data: Buffer) => {
-      const output = data.toString();
-      console.log(output);
-
-      if (output.includes('Error: listen EADDRINUSE')) {
-        // TODO: Kill the appium server if it is already running
-        logger.error(`Appium: ${data}`);
-        throw new Error(
-          `Appium server is already running. Please stop the server before running tests.`,
-        );
-      }
-
-      if (output.includes('Could not find online devices')) {
-        if (!emulatorStartRequested && provider == 'emulator') {
-          emulatorStartRequested = true;
-          await startAndroidEmulator();
-        }
-      }
-
-      if (output.includes('Appium REST http interface listener started')) {
-        logger.log('Appium server is up and running.');
-        resolve(appiumProcess);
-      }
-    });
-
-    appiumProcess.on('error', (error) => {
-      logger.error(`Appium: ${error}`);
-      reject(error);
-    });
-
-    process.on('exit', () => {
-      logger.log('Main process exiting. Killing Appium server...');
-      appiumProcess.kill();
-    });
-
-    appiumProcess.on('close', (code: number) => {
-      logger.log(`Appium server exited with code ${code}`);
-    });
-  });
-}
-
-export function stopAppiumServer() {
-  return new Promise((resolve, reject) => {
-    exec(`pkill -f appium`, (error, stdout) => {
-      if (error) {
-        logger.error(`Error stopping Appium server: ${error.message}`);
-        reject(error);
-      }
-      logger.log('Appium server stopped successfully.');
-      resolve(stdout);
-    });
-  });
-}
-
-export function isEmulatorInstalled(platform: Platform): Promise<boolean> {
-  return new Promise((resolve) => {
-    if (platform == Platform.ANDROID) {
-      const androidHome = process.env.ANDROID_HOME;
-
-      const emulatorPath = path.join(androidHome!, 'emulator', 'emulator');
-      exec(`${emulatorPath} -list-avds`, (error, stdout, stderr) => {
-        if (error) {
-          throw new Error(
-            `Error fetching emulator list.\nPlease install emulator from Android SDK Tools.
-Follow this guide to install emulators: https://community.neptune-software.com/topics/tips--tricks/blogs/how-to-install--android-emulator-without--android--st`,
-          );
-        }
-        if (stderr) {
-          logger.error(`Emulator: ${stderr}`);
-        }
-
-        const lines = stdout.trim().split('\n');
-
-        const deviceNames = lines.filter(
-          (line) => line.trim() && !line.startsWith('INFO') && !line.includes('/tmp/'),
-        );
-
-        if (deviceNames.length > 0) {
-          resolve(true);
-        } else {
-          throw new Error(
-            `No installed emulators found.
-Follow this guide to install emulators: https://community.neptune-software.com/topics/tips--tricks/blogs/how-to-install--android-emulator-without--android--st`,
-          );
-        }
-      });
-    }
-  });
-}
-
-export async function startAndroidEmulator(): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const androidHome = process.env.ANDROID_HOME;
-
-    const emulatorPath = path.join(androidHome!, 'emulator', 'emulator');
-
-    exec(`${emulatorPath} -list-avds`, (error, stdout, stderr) => {
-      if (error) {
-        throw new Error(
-          `Error fetching emulator list.\nPlease install emulator from Android SDK Tools.\nFollow this guide to install emulators: https://community.neptune-software.com/topics/tips--tricks/blogs/how-to-install--android-emulator-without--android--st`,
-        );
-      }
-      if (stderr) {
-        logger.error(`Emulator: ${stderr}`);
-      }
-
-      const lines = stdout.trim().split('\n');
-
-      // Filter out lines that do not contain device names
-      const deviceNames = lines.filter(
-        (line) => line.trim() && !line.startsWith('INFO') && !line.includes('/tmp/'),
-      );
-
-      if (deviceNames.length === 0) {
-        throw new Error(
-          `No installed emulators found.\nFollow this guide to install emulators: https://community.neptune-software.com/topics/tips--tricks/blogs/how-to-install--android-emulator-without--android--st`,
-        );
-      } else {
-        logger.log(`Available Emulators: ${deviceNames}`);
-      }
-
-      const emulatorToStart = deviceNames[0];
-
-      const emulatorProcess = spawn(emulatorPath, ['-avd', emulatorToStart!], {
-        stdio: 'pipe',
-      });
-
-      emulatorProcess.stdout?.on('data', (data) => {
-        logger.log(`Emulator: ${data}`);
-
-        if (data.includes("Successfully loaded snapshot 'default_boot'")) {
-          logger.log('Emulator started successfully.');
-          resolve();
-        }
-      });
-
-      emulatorProcess.on('error', (err) => {
-        logger.error(`Emulator: ${err.message}`);
-        reject(`Failed to start emulator: ${err.message}`);
-      });
-
-      emulatorProcess.on('close', (code) => {
-        if (code !== 0) {
-          reject(`Emulator process exited with code: ${code}`);
-        }
-      });
-
-      // Ensure the emulator process is killed when the main process exits
-      process.on('exit', () => {
-        logger.log('Main process exiting. Killing the emulator process...');
-        emulatorProcess.kill();
-      });
-    });
-  });
-}
+const execFilePromise = promisify(execFile);
 
 // ---------------------------------------------------------------------------
 // Shared Appium server lifecycle (one server per run, started in globalSetup).
 // ---------------------------------------------------------------------------
 
+const APPIUM_READY_MARKER = 'Appium REST http interface listener started';
+const APPIUM_STARTUP_TIMEOUT_MS = 60_000;
+const APPIUM_STOP_GRACE_MS = 5_000;
+
+/** The Appium server spawned by this process, killed by the single `process.on('exit')` guard. */
+let trackedAppiumProcess: ChildProcess | undefined;
+let exitGuardRegistered = false;
+
+function registerExitGuard() {
+  if (exitGuardRegistered) {
+    return;
+  }
+  exitGuardRegistered = true;
+  process.on('exit', () => {
+    const proc = trackedAppiumProcess;
+    if (proc && proc.exitCode === null && !proc.killed) {
+      logger.log('Main process exiting. Killing Appium server...');
+      proc.kill('SIGKILL');
+    }
+  });
+}
+
+function listenOn(port: number): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.unref();
+    server.once('error', (error) => {
+      server.close();
+      reject(error);
+    });
+    server.listen(port, '127.0.0.1', () => {
+      const address = server.address();
+      const assigned = typeof address === 'object' && address ? address.port : port;
+      server.close((closeError) => {
+        if (closeError) {
+          reject(closeError);
+        } else {
+          resolve(assigned);
+        }
+      });
+    });
+  });
+}
+
 /**
  * Returns a free TCP port on 127.0.0.1, preferring `preferred` when it is available.
  */
 export async function findFreePort(preferred: number = 4723): Promise<number> {
-  void preferred;
-  throw new Error('not implemented');
+  try {
+    return await listenOn(preferred);
+  } catch (error: any) {
+    if (error?.code !== 'EADDRINUSE') {
+      throw error;
+    }
+    logger.warn(`Port ${preferred} is in use; picking a free port for the Appium server.`);
+    return listenOn(0);
+  }
+}
+
+function forwardLines(prefix: string, data: Buffer, log: (...args: any[]) => void) {
+  const lines = data
+    .toString()
+    .split('\n')
+    .filter((line) => line.trim().length > 0);
+  for (const line of lines) {
+    log(`${prefix} ${line}`);
+  }
 }
 
 /**
  * Spawns one Appium server on `port` and resolves with the child process once the REST
  * listener is up. Rejects on EADDRINUSE, spawn errors, or if the process exits before it is ready.
- * Never passes `--session-override`.
+ * Never passes `--session-override` (it would delete every other live session on a new session).
  */
-export async function startSharedAppiumServer(port: number): Promise<ChildProcess> {
-  void port;
-  throw new Error('not implemented');
+export async function startAppiumServer(port: number): Promise<ChildProcess> {
+  return new Promise<ChildProcess>((resolve, reject) => {
+    let settled = false;
+    // https://github.com/appium/appium-uiautomator2-driver?tab=readme-ov-file#automatic-discovery-of-compatible-chromedriver
+    const appiumProcess = spawn(
+      'npx',
+      ['appium', '--port', String(port), '--allow-insecure=uiautomator2:chromedriver_autodownload'],
+      {
+        stdio: 'pipe',
+      },
+    );
+    trackedAppiumProcess = appiumProcess;
+    registerExitGuard();
+
+    const timeout = setTimeout(() => {
+      const seconds = APPIUM_STARTUP_TIMEOUT_MS / 1000;
+      fail(new Error(`Appium server did not start within ${seconds} s on port ${port}.`));
+      appiumProcess.kill('SIGKILL');
+    }, APPIUM_STARTUP_TIMEOUT_MS);
+
+    function fail(error: Error) {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      logger.error(`Appium: ${error.message}`);
+      reject(error);
+    }
+
+    function succeed() {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      logger.log(`Appium server is up and running on port ${port}.`);
+      resolve(appiumProcess);
+    }
+
+    function inspectOutput(output: string) {
+      if (output.includes('EADDRINUSE')) {
+        fail(
+          new Error(
+            `Port ${port} is already in use. Stop the process listening on it before running tests.`,
+          ),
+        );
+        appiumProcess.kill('SIGKILL');
+        return;
+      }
+      if (output.includes(APPIUM_READY_MARKER)) {
+        succeed();
+      }
+    }
+
+    appiumProcess.stdout?.on('data', (data: Buffer) => {
+      forwardLines('[Appium]', data, logger.log.bind(logger));
+      inspectOutput(data.toString());
+    });
+    appiumProcess.stderr?.on('data', (data: Buffer) => {
+      forwardLines('[Appium]', data, logger.warn.bind(logger));
+      inspectOutput(data.toString());
+    });
+
+    appiumProcess.on('error', (error) => {
+      fail(new Error(`Failed to spawn Appium server: ${error.message}`));
+    });
+
+    appiumProcess.on('exit', (code, signal) => {
+      if (trackedAppiumProcess === appiumProcess) {
+        trackedAppiumProcess = undefined;
+      }
+      logger.log(`Appium server exited with code ${code}${signal ? ` (signal ${signal})` : ''}`);
+      fail(new Error(`Appium server exited before it was ready (code ${code}, signal ${signal}).`));
+    });
+  });
 }
 
 /**
  * Stops the given Appium server process: SIGTERM, wait up to 5 s, then SIGKILL.
+ * Always resolves; failures are logged.
  */
-export async function stopSharedAppiumServer(proc: ChildProcess): Promise<void> {
-  void proc;
-  throw new Error('not implemented');
+export async function stopAppiumServer(proc: ChildProcess): Promise<void> {
+  if (proc.exitCode !== null || proc.signalCode !== null) {
+    logger.log('Appium server already stopped.');
+    return;
+  }
+  await new Promise<void>((resolve) => {
+    let finished = false;
+    const finish = () => {
+      if (finished) {
+        return;
+      }
+      finished = true;
+      clearTimeout(killTimer);
+      resolve();
+    };
+    const killTimer = setTimeout(() => {
+      const seconds = APPIUM_STOP_GRACE_MS / 1000;
+      logger.warn(`Appium server did not exit within ${seconds} s; sending SIGKILL.`);
+      try {
+        proc.kill('SIGKILL');
+      } catch (error: any) {
+        logger.error(`Error killing Appium server: ${error?.message ?? error}`);
+        finish();
+      }
+    }, APPIUM_STOP_GRACE_MS);
+    proc.once('exit', () => {
+      logger.log('Appium server stopped successfully.');
+      finish();
+    });
+    try {
+      proc.kill('SIGTERM');
+    } catch (error: any) {
+      logger.error(`Error stopping Appium server: ${error?.message ?? error}`);
+      finish();
+    }
+  });
+  if (trackedAppiumProcess === proc) {
+    trackedAppiumProcess = undefined;
+  }
+}
+
+function extractJsonObject(raw: string): Record<string, unknown> {
+  const start = raw.indexOf('{');
+  const end = raw.lastIndexOf('}');
+  if (start === -1 || end === -1 || end < start) {
+    throw new Error(`No JSON object found in output: ${raw.slice(0, 200)}`);
+  }
+  return JSON.parse(raw.slice(start, end + 1));
 }
 
 /**
@@ -239,16 +230,64 @@ export async function stopSharedAppiumServer(proc: ChildProcess): Promise<void> 
  * Never uninstalls.
  */
 export async function ensureDriverInstalled(driver: 'uiautomator2' | 'xcuitest'): Promise<void> {
-  void driver;
-  throw new Error('not implemented');
+  let installed: Record<string, unknown> = {};
+  try {
+    const { stdout } = await execFilePromise('npx', [
+      'appium',
+      'driver',
+      'list',
+      '--installed',
+      '--json',
+    ]);
+    installed = extractJsonObject(stdout);
+  } catch (error: any) {
+    logger.warn(
+      `Could not read installed Appium drivers (${error?.message ?? error}); attempting install.`,
+    );
+  }
+  if (Object.prototype.hasOwnProperty.call(installed, driver)) {
+    logger.log(`Appium driver "${driver}" is already installed.`);
+    return;
+  }
+  logger.log(`Installing Appium driver "${driver}"...`);
+  await new Promise<void>((resolve, reject) => {
+    const installProcess = spawn('npx', ['appium', 'driver', 'install', driver], {
+      stdio: 'pipe',
+    });
+    installProcess.stdout?.on('data', (data: Buffer) => {
+      forwardLines('[Appium driver]', data, logger.log.bind(logger));
+    });
+    installProcess.stderr?.on('data', (data: Buffer) => {
+      forwardLines('[Appium driver]', data, logger.warn.bind(logger));
+    });
+    installProcess.on('error', (error) => {
+      reject(new Error(`Failed to run appium driver install: ${error.message}`));
+    });
+    installProcess.on('exit', (code) => {
+      if (code === 0) {
+        logger.log(`Appium driver "${driver}" installed.`);
+        resolve();
+      } else {
+        reject(new Error(`appium driver install ${driver} exited with code ${code}.`));
+      }
+    });
+  });
 }
 
 /**
  * GET /status on the server; true when it answers 200 with `value.ready`.
  */
 export async function isAppiumHealthy(port: number): Promise<boolean> {
-  void port;
-  throw new Error('not implemented');
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/status`);
+    if (!response.ok) {
+      return false;
+    }
+    const body: any = await response.json();
+    return body?.value?.ready === true;
+  } catch {
+    return false;
+  }
 }
 
 export function getAppBundleId(filePath: string): Promise<string> {
