@@ -47,24 +47,29 @@ async function globalSetup(config: FullConfig<AppwrightConfig>) {
     if (!projects.includes(project.name)) {
       continue;
     }
+    const providerName = project.use.device?.provider;
+    const isLocalProvider = !!providerName && LOCAL_PROVIDERS.includes(providerName);
+
+    if (isLocalProvider) {
+      // Fail fast on a workers/devices mismatch before booting anything.
+      const entries = resolveDeviceEntries(project.use.device as any);
+      const available = entries.length === 0 ? 1 : entries.length;
+      if (config.workers > available) {
+        throw new Error(
+          `workers (${config.workers}) exceeds configured devices (${available}) for project ` +
+            `"${project.name}". Add entries to \`device.devices\` or set \`workers: ${available}\`.`,
+        );
+      }
+    }
+
     const provider = createDeviceProvider(project);
     await provider.globalSetup?.({ workers: config.workers });
 
-    const providerName = project.use.device?.provider;
-    if (!providerName || !LOCAL_PROVIDERS.includes(providerName)) {
+    if (!isLocalProvider) {
       continue;
     }
     if (providerName === 'emulator') {
       usedEmulatorProvider = true;
-    }
-
-    const entries = resolveDeviceEntries(project.use.device as any);
-    const available = entries.length === 0 ? 1 : entries.length;
-    if (config.workers > available) {
-      throw new Error(
-        `workers (${config.workers}) exceeds configured devices (${available}) for project ` +
-          `"${project.name}". Add entries to \`device.devices\` or set \`workers: ${available}\`.`,
-      );
     }
 
     const platform = project.use.platform;

@@ -50,6 +50,7 @@
     "@types/async-retry": "^1.4.9",
     "@types/fluent-ffmpeg": "^2.1.28",
     "@types/node": "^25.1.0",
+    "appium-uiautomator2-driver": "^8.5.2",
     "eslint": "9.39.2",
     "typedoc": "0.28.16",
     "vitest": "^4.0.18"

@@ -14,8 +14,11 @@ const BOOT_TIMEOUT_MS = 5 * 60 * 1000;
 const BOOT_POLL_INTERVAL_MS = 2000;
 /** Cap for one adb/simctl query that should return quickly. */
 const QUERY_TIMEOUT_MS = 30 * 1000;
-/** Grace period for an emulator process to exit after `adb emu kill` before it is SIGKILLed. */
-const SHUTDOWN_GRACE_MS = 10 * 1000;
+/**
+ * Grace period for an emulator process to exit after `adb emu kill` before it is SIGKILLed.
+ * The emulator itself waits up to 20 s to save its snapshot on shutdown, so stay above that.
+ */
+const SHUTDOWN_GRACE_MS = 45 * 1000;
 
 const EMULATOR_INSTALL_GUIDE =
   'https://community.neptune-software.com/topics/tips--tricks/blogs/how-to-install--android-emulator-without--android--st';
