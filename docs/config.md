@@ -234,7 +234,10 @@ export default defineConfig({
 ```
 
 Worker 0 uses `emulator-5554` and worker 1 uses `emulator-5556`. The same AVD can back several
-entries; each one is booted as a separate emulator instance on its own port.
+entries; each one is booted as a separate emulator instance on its own port. The Android emulator
+only allows this when all instances of that AVD run with `-read-only`, so Appwright adds the flag
+to every instance of a shared AVD (their disk changes are discarded on shutdown). An
+entry without `avd` that is not already running boots the first installed AVD, with a warning.
 
 ### Example: two iOS physical devices
 

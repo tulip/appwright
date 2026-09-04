@@ -10,14 +10,14 @@ import {
   TimeoutOptions,
 } from '../../types';
 import { validateBuildPath } from '../../utils';
-import { getApkDetails, getAppBundleId, isAppiumHealthy } from '../appium';
+import { getActiveAndroidDevices, getApkDetails, getAppBundleId, isAppiumHealthy } from '../appium';
 import {
   getAppiumPort,
   getDeviceEntryForSlot,
   getSlotCapabilities,
   resolveDeviceEntries,
 } from '../slots';
-import { ensureEmulatorsBooted, isDeviceOnline, listAvds } from './boot';
+import { ensureEmulatorsBooted, listAvds } from './boot';
 
 export class EmulatorProvider implements DeviceProvider {
   sessionId?: string;
@@ -68,19 +68,18 @@ Follow the steps mentioned in ${androidSimulatorConfigDocLink} to run test on An
       await listAvds();
     }
 
-    // Boot one emulator/simulator per worker slot. With no `devices`/`udid` configured this is
-    // empty and the Appium driver picks a running emulator itself (legacy behaviour).
-    const entries = resolveDeviceEntries(deviceConfig).slice(0, options?.workers ?? 1);
+    // Boot one emulator/simulator per worker slot.
+    let entries = resolveDeviceEntries(deviceConfig).slice(0, options?.workers ?? 1);
 
-    if (platform == Platform.ANDROID) {
-      for (const entry of entries) {
-        if (!entry.avd && !(await isDeviceOnline(platform, entry.udid))) {
-          throw new Error(
-            `Emulator "${entry.udid}" is not running and has no \`avd\` configured, so Appwright ` +
-              'cannot boot it. Either add `avd: "<name>"` to this entry in `device.devices` ' +
-              '(see `emulator -list-avds`) or boot the emulator manually before running tests.',
-          );
-        }
+    if (entries.length === 0 && platform == Platform.ANDROID) {
+      // Legacy behaviour: nothing configured. If no emulator is online, boot the first installed
+      // AVD on the default port; the session is created without a udid and picks it up.
+      if ((await getActiveAndroidDevices()) === 0) {
+        logger.warn(
+          'No `devices`/`udid` configured and no Android device is online; booting the first ' +
+            'installed AVD as "emulator-5554". Configure `device.devices` to control this.',
+        );
+        entries = [{ udid: 'emulator-5554' }];
       }
     }
 

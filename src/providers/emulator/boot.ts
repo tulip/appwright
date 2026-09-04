@@ -105,7 +105,8 @@ export async function isDeviceOnline(platform: Platform, udid: string): Promise<
  * Boots every entry that is not online yet and waits for it to finish booting.
  * Android boots `emulator -avd <avd> -port <port from udid>`; iOS runs
  * `xcrun simctl bootstatus <udid> -b`. Remembers which devices this process booted.
- * Throws when an Android entry is offline and has no `avd`.
+ * Android entries without an `avd` boot the first installed AVD; when several entries share
+ * one AVD, every instance after the first is started with `-read-only`.
  *
  * All offline entries are launched first and then awaited together. If any of them fails to
  * boot, everything this process booted is shut down again before the error is rethrown, so a
@@ -130,17 +131,32 @@ export async function ensureEmulatorsBooted(
   let waits: Promise<void>[];
   if (platform === Platform.ANDROID) {
     // Validate every entry before launching anything so a bad entry fails fast and cleanly.
+    // Entries without an `avd` fall back to the first installed AVD, matching the behaviour of
+    // earlier Appwright versions that always booted the first AVD.
+    let defaultAvd: string | undefined;
+    const toLaunch: DeviceEntry[] = [];
     for (const entry of offline) {
-      if (!entry.avd) {
-        throw new Error(
-          `Emulator "${entry.udid}" is not running and has no \`avd\` configured. ` +
-            `Add \`avd: "<name>"\` to boot it automatically or start it manually.`,
+      emulatorPortFromUdid(entry.udid);
+      let avd = entry.avd;
+      if (!avd) {
+        defaultAvd ??= (await listAvds())[0];
+        avd = defaultAvd;
+        logger.warn(
+          `Emulator "${entry.udid}" is not running and has no \`avd\` configured; booting the ` +
+            `first installed AVD "${avd}". Add \`avd: "<name>"\` to the entry to pick one explicitly.`,
         );
       }
-      emulatorPortFromUdid(entry.udid);
+      toLaunch.push({ ...entry, avd });
     }
     const emulatorPath = getEmulatorPath();
-    const launched = offline.map((entry) => launchAndroidEmulator(emulatorPath, entry));
+    // The emulator refuses to run one AVD twice unless *every* instance of it is read-only.
+    const avdUseCount = new Map<string, number>();
+    for (const entry of toLaunch) {
+      avdUseCount.set(entry.avd!, (avdUseCount.get(entry.avd!) ?? 0) + 1);
+    }
+    const launched = toLaunch.map((entry) =>
+      launchAndroidEmulator(emulatorPath, entry, (avdUseCount.get(entry.avd!) ?? 0) > 1),
+    );
     waits = launched.map((tracked) => waitForAndroidBoot(tracked));
   } else {
     waits = offline.map((entry) => bootSimulator(entry.udid));
@@ -204,12 +220,23 @@ function getEmulatorPath(): string {
   return path.join(androidHome, 'emulator', 'emulator');
 }
 
-function launchAndroidEmulator(emulatorPath: string, entry: DeviceEntry): TrackedEmulator {
+function launchAndroidEmulator(
+  emulatorPath: string,
+  entry: DeviceEntry,
+  readOnly: boolean,
+): TrackedEmulator {
   const { udid } = entry;
   const port = emulatorPortFromUdid(udid);
-  logger.log(`Booting emulator "${udid}" from AVD "${entry.avd}" on port ${port}...`);
+  logger.log(
+    `Booting emulator "${udid}" from AVD "${entry.avd}" on port ${port}` +
+      `${readOnly ? ' (read-only: this AVD is shared by several entries)' : ''}...`,
+  );
 
-  const child = spawn(emulatorPath, ['-avd', entry.avd!, '-port', String(port)], {
+  const args = ['-avd', entry.avd!, '-port', String(port)];
+  if (readOnly) {
+    args.push('-read-only');
+  }
+  const child = spawn(emulatorPath, args, {
     stdio: 'pipe',
     detached: false,
   });
@@ -304,6 +331,11 @@ async function waitForBootCompleted(udid: string): Promise<void> {
 
 async function shutdownAndroidEmulator(udid: string): Promise<void> {
   const tracked = emulatorProcesses.get(udid);
+  if (tracked && !isAlive(tracked.child)) {
+    // Already gone (e.g. it failed to boot); nothing to kill.
+    emulatorProcesses.delete(udid);
+    return;
+  }
   try {
     await execFileAsync('adb', ['-s', udid, 'emu', 'kill'], { timeout: QUERY_TIMEOUT_MS });
   } catch (error) {
