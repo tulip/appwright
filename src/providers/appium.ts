@@ -204,6 +204,53 @@ export async function startAndroidEmulator(): Promise<void> {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Shared Appium server lifecycle (one server per run, started in globalSetup).
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns a free TCP port on 127.0.0.1, preferring `preferred` when it is available.
+ */
+export async function findFreePort(preferred: number = 4723): Promise<number> {
+  void preferred;
+  throw new Error('not implemented');
+}
+
+/**
+ * Spawns one Appium server on `port` and resolves with the child process once the REST
+ * listener is up. Rejects on EADDRINUSE, spawn errors, or if the process exits before it is ready.
+ * Never passes `--session-override`.
+ */
+export async function startSharedAppiumServer(port: number): Promise<ChildProcess> {
+  void port;
+  throw new Error('not implemented');
+}
+
+/**
+ * Stops the given Appium server process: SIGTERM, wait up to 5 s, then SIGKILL.
+ */
+export async function stopSharedAppiumServer(proc: ChildProcess): Promise<void> {
+  void proc;
+  throw new Error('not implemented');
+}
+
+/**
+ * Installs the Appium driver only if `appium driver list --installed --json` does not list it.
+ * Never uninstalls.
+ */
+export async function ensureDriverInstalled(driver: 'uiautomator2' | 'xcuitest'): Promise<void> {
+  void driver;
+  throw new Error('not implemented');
+}
+
+/**
+ * GET /status on the server; true when it answers 200 with `value.ready`.
+ */
+export async function isAppiumHealthy(port: number): Promise<boolean> {
+  void port;
+  throw new Error('not implemented');
+}
+
 export function getAppBundleId(filePath: string): Promise<string> {
   return new Promise((resolve, reject) => {
     let command: string;
