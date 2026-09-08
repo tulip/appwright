@@ -1,9 +1,4 @@
-import {
-  ChildProcess,
-  exec,
-  execFile,
-  spawn,
-} from 'child_process';
+import { ChildProcess, exec, execFile, spawn } from 'child_process';
 import fs from 'fs/promises';
 import net from 'net';
 import path from 'path';
@@ -22,6 +17,8 @@ const execFilePromise = promisify(execFile);
 const APPIUM_READY_MARKER = 'Appium REST http interface listener started';
 const APPIUM_STARTUP_TIMEOUT_MS = 60_000;
 const APPIUM_STOP_GRACE_MS = 5_000;
+/** Address Appium listens on by default; the free-port probe must bind the same one. */
+const APPIUM_BIND_ADDRESS = '0.0.0.0';
 
 /** The Appium server spawned by this process, killed by the single `process.on('exit')` guard. */
 let trackedAppiumProcess: ChildProcess | undefined;
@@ -49,7 +46,10 @@ function listenOn(port: number): Promise<number> {
       server.close();
       reject(error);
     });
-    server.listen(port, '127.0.0.1', () => {
+    // Appium binds the IPv4 wildcard (0.0.0.0). Probe the same address: on macOS/BSD a bind to
+    // 127.0.0.1 (or Node's default ::) succeeds even while another process holds 0.0.0.0:port,
+    // which made this check pass when the port was in fact taken.
+    server.listen(port, APPIUM_BIND_ADDRESS, () => {
       const address = server.address();
       const assigned = typeof address === 'object' && address ? address.port : port;
       server.close((closeError) => {
@@ -64,7 +64,7 @@ function listenOn(port: number): Promise<number> {
 }
 
 /**
- * Returns a free TCP port on 127.0.0.1, preferring `preferred` when it is available.
+ * Returns a free TCP port on 0.0.0.0 (what Appium binds), preferring `preferred` when available.
  */
 export async function findFreePort(preferred: number = 4723): Promise<number> {
   try {
