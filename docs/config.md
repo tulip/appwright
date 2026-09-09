@@ -197,7 +197,8 @@ Rules to keep in mind:
   worker after a failure the new worker reuses the same `parallelIndex`, so a retried test runs on
   the same device as the original attempt.
 - One Appium server is started per run on a free port (4723 if available, otherwise the next free
-  one) and shut down when the run ends. Workers only create and delete sessions on it; Appium is no
+  one) and shut down when the run ends. If the port is grabbed by another process between the
+  check and the start, Appwright retries once on a fresh port. Workers only create and delete sessions on it; Appium is no
   longer restarted after every test. The Appium driver is installed once, and skipped if it is
   already installed.
 - Ports that must be unique per concurrent session on one host (`systemPort` on Android;

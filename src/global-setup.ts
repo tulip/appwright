@@ -6,8 +6,7 @@ import { logger } from './logger';
 import { createDeviceProvider } from './providers';
 import {
   ensureDriverInstalled,
-  findFreePort,
-  startAppiumServer,
+  startAppiumServerOnFreePort,
   stopAppiumServer,
 } from './providers/appium';
 import { shutdownBootedEmulators } from './providers/emulator/boot';
@@ -76,9 +75,9 @@ async function globalSetup(config: FullConfig<AppwrightConfig>) {
     await ensureDriverInstalled(platform === Platform.ANDROID ? 'uiautomator2' : 'xcuitest');
 
     if (!appiumProcess) {
-      const port = await findFreePort();
-      appiumProcess = await startAppiumServer(port);
-      process.env[APPIUM_PORT_ENV] = String(port);
+      const server = await startAppiumServerOnFreePort();
+      appiumProcess = server.process;
+      process.env[APPIUM_PORT_ENV] = String(server.port);
     }
   }
 

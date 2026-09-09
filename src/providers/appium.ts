@@ -20,6 +20,14 @@ const APPIUM_STOP_GRACE_MS = 5_000;
 /** Address Appium listens on by default; the free-port probe must bind the same one. */
 const APPIUM_BIND_ADDRESS = '0.0.0.0';
 
+/** Thrown when the Appium server could not bind its port because another process holds it. */
+export class AppiumPortInUseError extends Error {
+  constructor(public readonly port: number) {
+    super(`Port ${port} is already in use. Stop the process listening on it before running tests.`);
+    this.name = 'AppiumPortInUseError';
+  }
+}
+
 /** The Appium server spawned by this process, killed by the single `process.on('exit')` guard. */
 let trackedAppiumProcess: ChildProcess | undefined;
 let exitGuardRegistered = false;
@@ -134,12 +142,11 @@ export async function startAppiumServer(port: number): Promise<ChildProcess> {
     }
 
     function inspectOutput(output: string) {
-      if (output.includes('EADDRINUSE')) {
-        fail(
-          new Error(
-            `Port ${port} is already in use. Stop the process listening on it before running tests.`,
-          ),
-        );
+      if (
+        output.includes('EADDRINUSE') ||
+        output.includes('The requested port may already be in use')
+      ) {
+        fail(new AppiumPortInUseError(port));
         appiumProcess.kill('SIGKILL');
         return;
       }
@@ -169,6 +176,41 @@ export async function startAppiumServer(port: number): Promise<ChildProcess> {
       fail(new Error(`Appium server exited before it was ready (code ${code}, signal ${signal}).`));
     });
   });
+}
+
+export type AppiumServerHandle = { process: ChildProcess; port: number };
+
+/**
+ * Picks a free port and starts the Appium server on it. If the server still fails to bind
+ * because another process grabbed the port in between (or the probe was fooled), a fresh
+ * ephemeral port is picked and the start is retried, `retries` times (default once).
+ */
+export async function startAppiumServerOnFreePort(
+  preferred: number = 4723,
+  options: {
+    retries?: number;
+    start?: (port: number) => Promise<ChildProcess>;
+    pickPort?: (preferred: number) => Promise<number>;
+  } = {},
+): Promise<AppiumServerHandle> {
+  const { retries = 1, start = startAppiumServer, pickPort = findFreePort } = options;
+  let port = await pickPort(preferred);
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const process = await start(port);
+      return { process, port };
+    } catch (error) {
+      if (!(error instanceof AppiumPortInUseError) || attempt >= retries) {
+        throw error;
+      }
+      logger.warn(
+        `Appium could not bind port ${port} (taken by another process); retrying on a new port ` +
+          `(${attempt + 1}/${retries}).`,
+      );
+      // 0 asks the OS for an ephemeral port, guaranteeing a different one than `port`.
+      port = await pickPort(0);
+    }
+  }
 }
 
 /**
