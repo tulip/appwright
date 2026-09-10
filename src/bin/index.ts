@@ -1,32 +1,31 @@
 #!/usr/bin/env node
-import { spawn } from "child_process";
-import { logger } from "../logger";
+import { spawn } from 'child_process';
 
-function cmd(
-  command: string[],
-  options: { env?: Record<string, string> },
-): Promise<number> {
+import { logger } from '../logger';
+import { prepareInvocation } from './args';
+
+function cmd(command: string[], options: { env?: Record<string, string> }): Promise<number> {
   let errorLogs: string[] = [];
   return new Promise((resolveFunc, rejectFunc) => {
     let p = spawn(command[0]!, command.slice(1), {
       env: { ...process.env, ...options.env },
     });
-    p.stdout.on("data", (x) => {
+    p.stdout.on('data', (x) => {
       const log = x.toString();
-      if (log.includes("Error")) {
+      if (log.includes('Error')) {
         errorLogs.push(log);
       }
       process.stdout.write(log);
     });
-    p.stderr.on("data", (x) => {
+    p.stderr.on('data', (x) => {
       const log = x.toString();
       process.stderr.write(x.toString());
       errorLogs.push(log);
     });
-    p.on("exit", (code) => {
+    p.on('exit', (code) => {
       if (code != 0) {
         // assuming last log is the error message before exiting
-        rejectFunc(errorLogs.slice(-3).join("\n"));
+        rejectFunc(errorLogs.slice(-3).join('\n'));
       } else {
         resolveFunc(code!);
       }
@@ -34,20 +33,17 @@ function cmd(
   });
 }
 
-async function runPlaywrightCmd(args: string) {
-  const pwRunCmd = `npx playwright ${args}`;
-  return cmd(pwRunCmd.split(" "), {});
-}
-
 (async function main() {
-  const defaultConfigFile = `appwright.config.ts`;
-  const pwOptions = process.argv.slice(2);
-  if (!pwOptions.includes("--config")) {
-    pwOptions.push(`--config`);
-    pwOptions.push(defaultConfigFile);
-  }
+  let invocation: ReturnType<typeof prepareInvocation>;
   try {
-    await runPlaywrightCmd(pwOptions.join(" "));
+    invocation = prepareInvocation(process.argv.slice(2));
+  } catch (error: any) {
+    logger.error(error?.message ?? String(error));
+    process.exit(1);
+  }
+  logger.log(`Run name: ${invocation.runName}`);
+  try {
+    await cmd(['npx', 'playwright', ...invocation.pwArgs], { env: invocation.env });
   } catch (error: any) {
     logger.error(`Error while running playwright test: ${error}`);
     process.exit(1);
