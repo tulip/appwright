@@ -99,4 +99,8 @@ npx appwright test --project ios
 
 Above commands will trigger runs on android and iOS emulators based on the above configuration.
 
+Each run writes its results into `test-results/<run>` and its HTML report into
+`playwright-report/<run>`. Pass `--run-name <name>` to choose the folder name; see
+[Test results per run](config.md#test-results-per-run).
+
 Once the test is completed, the report is launched automatically in the browser.
