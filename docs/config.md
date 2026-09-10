@@ -269,3 +269,39 @@ export default defineConfig({
 
 Find the UDIDs with `xcrun xctrace list devices`. Both devices must be connected and trusted before
 the run starts; Appwright does not boot or pair physical devices.
+
+## Test results per run
+
+Every run writes into its own folders, so two runs started side by side on one machine (for
+example iOS and Android at the same time) never overwrite each other's output:
+
+```
+test-results/<run>/               Playwright output: per-test artifacts, .last-run.json
+test-results/<run>/videos-store/  Appwright worker videos and worker-info files
+playwright-report/<run>/          HTML report
+```
+
+Open a report with `npx playwright show-report playwright-report/<run>`. Global setup logs the
+folders of the current run when it starts.
+
+### Naming a run
+
+- `npx appwright test --project android --run-name nightly` names the run `nightly`. The flag is
+  handled by the appwright CLI and is not passed on to Playwright.
+- `APPWRIGHT_RUN_NAME=nightly npx appwright test --project android` does the same through the
+  environment, which is convenient in CI. The flag wins when both are given.
+- Without either, the run is named `<project>-<YYYYMMDD>-<HHmmss>-<4 random chars>` in local time,
+  for example `android-20260910-143201-k3x9`. Several `--project` values are joined with `+`.
+
+Names are used as folder names, so anything other than letters, digits, `.`, `_`, `-` and `+` is
+replaced with `-`, and leading dots are removed.
+
+### Interaction with Playwright options
+
+- A custom `outputDir` or html `outputFolder` in your config is kept as the base folder; the run
+  name is nested under it (`<outputDir>/<run>`).
+- Playwright's own `--output <dir>` flag still overrides `outputDir` completely, as it always has.
+- `--last-failed` reads `.last-run.json` from the run's output folder. To rerun the failures of an
+  earlier run, pass the same `--run-name` again.
+- Run folders are never deleted automatically. Remove `test-results/` and `playwright-report/` when
+  you want the disk space back.

@@ -7,6 +7,13 @@ import {
 } from '@playwright/test';
 
 import { logger } from './logger';
+import {
+  applyRunNameToReporters,
+  DEFAULT_OUTPUT_DIR,
+  normalizeReporters,
+  resolveRunName,
+  runOutputDir,
+} from './run-name';
 import { AppwrightConfig } from './types';
 
 const resolveGlobalSetup = () => {
@@ -21,6 +28,8 @@ const resolveVideoReporter = () => {
   return path.join(directory, 'reporter.js');
 };
 
+const defaultReporters: ReporterDescription[] = [['list'], ['html', { open: 'always' }]];
+
 const defaultConfig: PlaywrightTestConfig<AppwrightConfig> = {
   globalSetup: resolveGlobalSetup(),
   testDir: './tests',
@@ -32,7 +41,6 @@ const defaultConfig: PlaywrightTestConfig<AppwrightConfig> = {
   // For local-device / emulator runs, `workers` must not exceed the number of entries in
   // `device.devices`: each worker drives its own device (slot = parallelIndex).
   workers: 2,
-  reporter: [['list'], ['html', { open: 'always' }]],
   use: {
     // TODO: Use this for actions
     actionTimeout: 20_000,
@@ -53,16 +61,16 @@ export function defineConfig(config: PlaywrightTestConfig<AppwrightConfig>) {
     );
     delete config.globalSetup;
   }
-  let reporterConfig: ReporterDescription[];
-  if (config.reporter) {
-    reporterConfig = config.reporter as ReporterDescription[];
-  } else {
-    reporterConfig = [['list'], ['html', { open: 'always' }]];
-  }
+  // Every run writes into its own folders (`test-results/<run>`, `playwright-report/<run>`) so
+  // concurrent runs on one machine do not clobber each other. The name comes from the appwright CLI
+  // (`--run-name` / APPWRIGHT_RUN_NAME) or is generated here and inherited by the worker processes.
+  const runName = resolveRunName();
+  const reporterConfig = normalizeReporters(config.reporter) ?? defaultReporters;
   return defineConfigPlaywright<AppwrightConfig>({
     ...defaultConfig,
     ...config,
-    reporter: [[resolveVideoReporter()], ...reporterConfig],
+    outputDir: runOutputDir(runName, config.outputDir ?? DEFAULT_OUTPUT_DIR),
+    reporter: [[resolveVideoReporter()], ...applyRunNameToReporters(reporterConfig, runName)],
     use: {
       ...defaultConfig.use,
       expectTimeout: config.use?.expectTimeout

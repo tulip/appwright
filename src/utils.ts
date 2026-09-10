@@ -3,6 +3,8 @@ import path from 'path';
 
 import test from '@playwright/test';
 
+import { resolveRunName, runOutputDir, VIDEOS_STORE_DIR } from './run-name';
+
 export function boxedStep(target: Function, context: ClassMethodDecoratorContext) {
   return function replacementMethod(
     this: {
@@ -75,8 +77,14 @@ export function longestDeterministicGroup(pattern: RegExp): string | undefined {
   return longestString;
 }
 
+/**
+ * Folder for this run's worker videos and worker-info files: `test-results/<run>/videos-store`.
+ * It lives inside Playwright's per-run output dir (which Playwright clears at the start of a run)
+ * rather than inside the html report folder, which the html reporter deletes before it copies
+ * attachments.
+ */
 export function basePath() {
-  return path.join(process.cwd(), 'playwright-report', 'data', 'videos-store');
+  return path.join(process.cwd(), runOutputDir(resolveRunName()), VIDEOS_STORE_DIR);
 }
 
 export function isNoSuchWindowError(error: unknown): boolean {

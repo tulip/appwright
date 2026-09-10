@@ -1,4 +1,5 @@
 import { type ChildProcess } from 'child_process';
+import path from 'path';
 
 import { type FullConfig } from '@playwright/test';
 
@@ -11,23 +12,32 @@ import {
 } from './providers/appium';
 import { shutdownBootedEmulators } from './providers/emulator/boot';
 import { APPIUM_PORT_ENV, resolveDeviceEntries } from './providers/slots';
+import { parseProjectsFromArgv, resolveRunName } from './run-name';
 import { AppwrightConfig, Platform } from './types';
 
 const LOCAL_PROVIDERS = ['local-device', 'emulator'];
 
+/**
+ * One log line saying where this run's results go, so that interleaved output from several
+ * concurrent runs in one terminal can be told apart.
+ */
+function logRunLocation(config: FullConfig<AppwrightConfig>, projects: string[]) {
+  const runName = resolveRunName();
+  const selected = config.projects.filter((project) => projects.includes(project.name));
+  const outputDirs = [...new Set(selected.map((project) => project.outputDir))].map((dir) =>
+    path.relative(process.cwd(), dir),
+  );
+  const htmlReporter = config.reporter.find(([name]) => name === 'html');
+  const reportDir: string | undefined = htmlReporter?.[1]?.outputFolder;
+  const parts = [`test output in ${outputDirs.join(', ')}`];
+  if (reportDir) {
+    parts.push(`HTML report in ${path.relative(process.cwd(), reportDir)}`);
+  }
+  logger.log(`Run "${runName}": ${parts.join(', ')}`);
+}
+
 async function globalSetup(config: FullConfig<AppwrightConfig>) {
-  const args = process.argv;
-  const projects: string[] = [];
-  args.forEach((arg, index) => {
-    if (arg === '--project') {
-      const project = args[index + 1];
-      if (project) {
-        projects.push(project);
-      } else {
-        throw new Error('Project name is required with --project flag');
-      }
-    }
-  });
+  const projects = parseProjectsFromArgv(process.argv);
 
   if (projects.length == 0) {
     // Capability to run all projects is not supported currently
@@ -36,6 +46,8 @@ async function globalSetup(config: FullConfig<AppwrightConfig>) {
       'Capability to run all projects is not supported. Please specify the project name with --project flag.',
     );
   }
+
+  logRunLocation(config, projects);
 
   // One Appium server is shared by every local project selected for this run.
   let appiumProcess: ChildProcess | undefined;

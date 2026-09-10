@@ -142,6 +142,17 @@ To run on several local devices or emulators at once, list them under `device.de
 project config and raise `workers` up to that number; each Playwright worker then drives its own
 device. See [Running on multiple local devices](docs/config.md#running-on-multiple-local-devices).
 
+Every run writes its results into its own folders, `test-results/<run>` and
+`playwright-report/<run>`, so runs started side by side do not overwrite each other. Name a run
+with `--run-name`; without it the folder is called `<project>-<YYYYMMDD>-<HHmmss>-<4 random chars>`.
+
+```sh
+npx appwright test --project android --run-name nightly
+npx playwright show-report playwright-report/nightly
+```
+
+See [Test results per run](docs/config.md#test-results-per-run).
+
 #### Run tests on BrowserStack
 
 Appwright supports BrowserStack out of the box. To run tests on BrowserStack, configure
