@@ -29,6 +29,8 @@ const defaultConfig: PlaywrightTestConfig<AppwrightConfig> = {
   fullyParallel: false,
   forbidOnly: false,
   retries: process.env.CI ? 2 : 0,
+  // For local-device / emulator runs, `workers` must not exceed the number of entries in
+  // `device.devices`: each worker drives its own device (slot = parallelIndex).
   workers: 2,
   reporter: [['list'], ['html', { open: 'always' }]],
   use: {
