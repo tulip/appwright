@@ -190,9 +190,11 @@ device, but then only one worker can run.
 
 Rules to keep in mind:
 
-- `workers` must not exceed the number of entries in `devices`. Appwright checks this in global
-  setup and fails fast with a message telling you to add devices or lower `workers`, before any
-  session is opened.
+- `workers` must not exceed the number of entries in `devices`. When `devices` is listed,
+  Appwright checks this in global setup and fails fast with a message telling you to add devices
+  or lower `workers`, before any session is opened. Configs that use the single-`udid` shorthand
+  (or neither) are left to the old behaviour: they keep running as long as Playwright spawns one
+  worker, and the second worker fails when it asks for a device it has not been given.
 - The worker slot is Playwright's `parallelIndex`, not `workerIndex`. When Playwright restarts a
   worker after a failure the new worker reuses the same `parallelIndex`, so a retried test runs on
   the same device as the original attempt.

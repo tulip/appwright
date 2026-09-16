@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from 'vitest';
 
 import {
   APPIUM_PORT_ENV,
+  assertWorkersFitDevices,
   emulatorPortFromUdid,
   getAppiumPort,
   getDeviceEntryForSlot,
@@ -109,6 +110,35 @@ describe('getDeviceEntryForSlot', () => {
 
   test('negative slot throws', () => {
     expect(() => getDeviceEntryForSlot({ udid: 'x' }, -1)).toThrow(/non-negative/);
+  });
+});
+
+describe('assertWorkersFitDevices', () => {
+  test('throws when workers exceeds the listed devices', () => {
+    expect(() => assertWorkersFitDevices({ devices: [{ udid: 'a' }] }, 2, 'android')).toThrow(
+      /workers \(2\) exceeds configured devices \(1\) for project "android"/,
+    );
+  });
+
+  test('passes when workers matches or is under the listed devices', () => {
+    const device = { devices: [{ udid: 'a' }, { udid: 'b' }] };
+    expect(() => assertWorkersFitDevices(device, 2, 'android')).not.toThrow();
+    expect(() => assertWorkersFitDevices(device, 1, 'android')).not.toThrow();
+  });
+
+  // Regression: `workers` defaults to 2, so checking the single-`udid` shorthand here would
+  // reject every pre-`devices` config on upgrade. Those runs fail later, per slot, only if a
+  // second worker really starts.
+  test('leaves the single-udid shorthand alone even when workers is higher', () => {
+    expect(() => assertWorkersFitDevices({ udid: 'only' }, 2, 'android')).not.toThrow();
+  });
+
+  test('leaves a config with no device alone', () => {
+    expect(() => assertWorkersFitDevices({}, 4, 'android')).not.toThrow();
+  });
+
+  test('ignores an empty devices list', () => {
+    expect(() => assertWorkersFitDevices({ devices: [] }, 2, 'android')).not.toThrow();
   });
 });
 

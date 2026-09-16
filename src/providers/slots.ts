@@ -34,6 +34,11 @@ type SlotDeviceConfig = Pick<LocalDeviceConfig | EmulatorConfig, 'udid' | 'devic
  * - iOS: `appium:wdaLocalPort` (WDA forward), `appium:mjpegServerPort` (XCUITest binds it on
  *   every session, so it must be unique once set) and `appium:derivedDataPath` (per-instance
  *   WDA build products, as recommended by the XCUITest parallel-tests guide).
+ *
+ * These ports are derived from the slot and deliberately not probed for availability, unlike the
+ * Appium server port: the bases below are the driver defaults, and a run needs only `workers`
+ * consecutive ports from each, so the ranges are assumed free on the host. If something else on
+ * the machine holds one, session creation fails inside the driver rather than here.
  */
 export function getSlotCapabilities(
   platform: Platform,
@@ -110,6 +115,30 @@ export function getDeviceEntryForSlot(
     );
   }
   return entry;
+}
+
+/**
+ * Fails a run whose `workers` exceeds the devices it was given, before anything is booted.
+ *
+ * Only configs that opt into the `devices` list are checked. `workers` defaults to 2, and a
+ * config written before `devices` existed names at most a single `udid`, so checking those would
+ * reject them all on upgrade even though Playwright often spawns a single worker anyway
+ * (`fullyParallel: false` with one spec file), which is what such runs relied on. They keep
+ * working; a second worker instead fails in `getDeviceEntryForSlot` when it asks for its device.
+ */
+export function assertWorkersFitDevices(
+  device: SlotDeviceConfig,
+  workers: number,
+  projectName: string,
+) {
+  const configured = device.devices;
+  if (!configured || configured.length === 0 || workers <= configured.length) {
+    return;
+  }
+  throw new Error(
+    `workers (${workers}) exceeds configured devices (${configured.length}) for project ` +
+      `"${projectName}". Add entries to \`device.devices\` or set \`workers: ${configured.length}\`.`,
+  );
 }
 
 /**

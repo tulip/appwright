@@ -68,8 +68,18 @@ Follow the steps mentioned in ${androidSimulatorConfigDocLink} to run test on An
       await listAvds();
     }
 
-    // Boot one emulator/simulator per worker slot.
-    let entries = resolveDeviceEntries(deviceConfig).slice(0, options?.workers ?? 1);
+    // Boot one emulator/simulator per worker slot. Configured devices beyond the worker count
+    // are left alone, so a config can list every device and a run use a subset.
+    const configured = resolveDeviceEntries(deviceConfig);
+    let entries = configured.slice(0, options?.workers ?? 1);
+    if (configured.length > entries.length) {
+      const skipped = configured.slice(entries.length).map((entry) => entry.udid);
+      logger.log(
+        `Using ${entries.length} of ${configured.length} configured devices ` +
+          `(${entries.map((entry) => entry.udid).join(', ')}); ` +
+          `skipping ${skipped.join(', ')} because \`workers\` is ${options?.workers ?? 1}.`,
+      );
+    }
 
     if (entries.length === 0 && platform == Platform.ANDROID) {
       // Legacy behaviour: nothing configured. If no emulator is online, boot the first installed
