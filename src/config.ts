@@ -11,6 +11,7 @@ import {
   applyRunNameToReporters,
   DEFAULT_OUTPUT_DIR,
   normalizeReporters,
+  publishOutputDir,
   resolveRunName,
   runOutputDir,
 } from './run-name';
@@ -66,10 +67,13 @@ export function defineConfig(config: PlaywrightTestConfig<AppwrightConfig>) {
   // (`--run-name` / APPWRIGHT_RUN_NAME) or is generated here and inherited by the worker processes.
   const runName = resolveRunName();
   const reporterConfig = normalizeReporters(config.reporter) ?? defaultReporters;
+  // Published so that folders derived from the output dir (the video store) follow a custom
+  // `outputDir` instead of assuming the default base.
+  const outputDir = publishOutputDir(runOutputDir(runName, config.outputDir ?? DEFAULT_OUTPUT_DIR));
   return defineConfigPlaywright<AppwrightConfig>({
     ...defaultConfig,
     ...config,
-    outputDir: runOutputDir(runName, config.outputDir ?? DEFAULT_OUTPUT_DIR),
+    outputDir,
     reporter: [[resolveVideoReporter()], ...applyRunNameToReporters(reporterConfig, runName)],
     use: {
       ...defaultConfig.use,

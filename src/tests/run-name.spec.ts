@@ -8,14 +8,18 @@ import {
   formatTimestamp,
   generateRunName,
   normalizeReporters,
+  OUTPUT_DIR_ENV,
   parseProjectsFromArgv,
+  publishOutputDir,
   randomSuffix,
+  resolveOutputDir,
   resolveRunName,
   RUN_NAME_ENV,
   runOutputDir,
   runReportDir,
   sanitizeRunName,
 } from '../run-name';
+import { basePath } from '../utils';
 
 describe('sanitizeRunName', () => {
   test('keeps letters, digits, dots, underscores, dashes and plus signs', () => {
@@ -63,7 +67,9 @@ describe('generateRunName', () => {
   });
 
   test('joins several projects with a plus sign', () => {
-    expect(generateRunName(['ios', 'android'], now, 'k3x9')).toBe('ios+android-20260910-143201-k3x9');
+    expect(generateRunName(['ios', 'android'], now, 'k3x9')).toBe(
+      'ios+android-20260910-143201-k3x9',
+    );
   });
 
   test('falls back to "run" when no project is selected', () => {
@@ -218,12 +224,67 @@ describe('applyRunNameToReporters', () => {
   test('leaves other reporters and their order untouched', () => {
     const custom = '/abs/path/to/reporter.js';
     expect(
-      applyRunNameToReporters([[custom], ['list'], ['html', { open: 'always' }], ['json']], 'smoke'),
+      applyRunNameToReporters(
+        [[custom], ['list'], ['html', { open: 'always' }], ['json']],
+        'smoke',
+      ),
     ).toEqual([
       [custom],
       ['list'],
       ['html', { open: 'always', outputFolder: path.join('playwright-report', 'smoke') }],
       ['json'],
     ]);
+  });
+});
+
+describe('resolveOutputDir', () => {
+  const originalOutputDir = process.env[OUTPUT_DIR_ENV];
+  const originalRunName = process.env[RUN_NAME_ENV];
+
+  beforeEach(() => {
+    delete process.env[OUTPUT_DIR_ENV];
+    process.env[RUN_NAME_ENV] = 'smoke';
+  });
+
+  afterEach(() => {
+    restore(OUTPUT_DIR_ENV, originalOutputDir);
+    restore(RUN_NAME_ENV, originalRunName);
+  });
+
+  function restore(key: string, value: string | undefined) {
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+
+  test('falls back to the default base when no config has been evaluated', () => {
+    expect(resolveOutputDir()).toBe(path.join('test-results', 'smoke'));
+  });
+
+  test('uses the output dir published by defineConfig', () => {
+    publishOutputDir(path.join('custom-output', 'smoke'));
+    expect(resolveOutputDir()).toBe(path.join('custom-output', 'smoke'));
+  });
+
+  test('ignores a blank value', () => {
+    process.env[OUTPUT_DIR_ENV] = '   ';
+    expect(resolveOutputDir()).toBe(path.join('test-results', 'smoke'));
+  });
+
+  test('basePath follows a custom output dir', () => {
+    publishOutputDir(path.join('custom-output', 'smoke'));
+    expect(basePath()).toBe(path.resolve(process.cwd(), 'custom-output', 'smoke', 'videos-store'));
+  });
+
+  test('basePath defaults to the run folder under test-results', () => {
+    expect(basePath()).toBe(path.resolve(process.cwd(), 'test-results', 'smoke', 'videos-store'));
+  });
+
+  test('basePath honours an absolute output dir', () => {
+    const absolute = path.resolve(path.sep, 'tmp', 'appwright-out', 'smoke');
+    publishOutputDir(absolute);
+    expect(basePath()).toBe(path.join(absolute, 'videos-store'));
   });
 });

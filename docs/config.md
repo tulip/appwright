@@ -305,5 +305,38 @@ replaced with `-`, and leading dots are removed.
 - Playwright's own `--output <dir>` flag still overrides `outputDir` completely, as it always has.
 - `--last-failed` reads `.last-run.json` from the run's output folder. To rerun the failures of an
   earlier run, pass the same `--run-name` again.
+- Only the html reporter's folder is namespaced automatically. Reporters that write to a path you
+  choose (`json`, `junit`) or to their own folder (`blob`) keep writing exactly where their options
+  say, so two concurrent runs still overwrite each other there. Put the run name in the path
+  yourself when you need those side by side:
+
+  ```ts
+  import { defineConfig, resolveRunName } from "appwright";
+
+  const run = resolveRunName();
+
+  export default defineConfig({
+    reporter: [
+      ["list"],
+      ["html"],
+      ["json", { outputFile: `test-results/${run}/results.json` }],
+    ],
+    // ...
+  });
+  ```
+
 - Run folders are never deleted automatically. Remove `test-results/` and `playwright-report/` when
   you want the disk space back.
+
+### Upgrading from a flat layout
+
+Before this change every run wrote straight into `test-results/` and `playwright-report/`. Results
+are now one level deeper, under the run folder. Update anything that reads a fixed path — CI
+artifact globs, `npx playwright show-report`, scripts that open `playwright-report/index.html` — to
+include the run folder, and pass `--run-name <name>` when you want that folder to have a known,
+stable name:
+
+```sh
+npx appwright test --project android --run-name ci
+npx playwright show-report playwright-report/ci
+```

@@ -12,6 +12,13 @@ import type { PlaywrightTestConfig, ReporterDescription } from '@playwright/test
  */
 export const RUN_NAME_ENV = 'APPWRIGHT_RUN_NAME';
 
+/**
+ * Environment variable through which `defineConfig` publishes the run's resolved Playwright
+ * `outputDir` to the rest of appwright, so that folders derived from it (the video store) follow a
+ * custom `outputDir` instead of assuming the default base.
+ */
+export const OUTPUT_DIR_ENV = 'APPWRIGHT_OUTPUT_DIR';
+
 /** Playwright's default `outputDir`; per-run folders are nested under it. */
 export const DEFAULT_OUTPUT_DIR = 'test-results';
 /** The html reporter's default `outputFolder`; per-run folders are nested under it. */
@@ -157,6 +164,31 @@ export function resolveRunName(argv: readonly string[] = process.argv): string {
 /** Playwright `outputDir` for a run: `<base>/<runName>`. */
 export function runOutputDir(runName: string, base: string = DEFAULT_OUTPUT_DIR): string {
   return path.join(base, runName);
+}
+
+/**
+ * The run's Playwright `outputDir` for the current process.
+ *
+ * `defineConfig` resolves it (honouring a custom `outputDir` in the consumer config) and publishes
+ * it through {@link OUTPUT_DIR_ENV}; Playwright re-evaluates the config in every worker, so the
+ * value is available wherever appwright runs. Falls back to the default base for processes that
+ * never loaded an appwright config.
+ *
+ * Note that Playwright's `--output <dir>` flag overrides `outputDir` after the config has been
+ * evaluated, so it is not reflected here.
+ */
+export function resolveOutputDir(): string {
+  const fromEnv = process.env[OUTPUT_DIR_ENV];
+  if (fromEnv !== undefined && fromEnv.trim() !== '') {
+    return fromEnv;
+  }
+  return runOutputDir(resolveRunName());
+}
+
+/** Stores the run's resolved `outputDir` so every process of this run derives folders from it. */
+export function publishOutputDir(outputDir: string): string {
+  process.env[OUTPUT_DIR_ENV] = outputDir;
+  return outputDir;
 }
 
 /** html reporter `outputFolder` for a run: `<base>/<runName>`. */
