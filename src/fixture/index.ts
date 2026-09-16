@@ -5,7 +5,6 @@ import {
 
 import { Device } from '../device';
 import { createDeviceProvider } from '../providers';
-import { stopAppiumServer } from '../providers/appium';
 import {
   ActionOptions,
   AppwrightConfig,
@@ -44,7 +43,7 @@ type WorkerLevelFixtures = {
 
 export const test = base.extend<TestLevelFixtures, WorkerLevelFixtures>({
   deviceProvider: async ({}, use, testInfo) => {
-    const deviceProvider = createDeviceProvider(testInfo.project);
+    const deviceProvider = createDeviceProvider(testInfo.project, testInfo.parallelIndex);
     await use(deviceProvider);
   },
   device: async ({ deviceProvider }, use, testInfo) => {
@@ -74,9 +73,6 @@ export const test = base.extend<TestLevelFixtures, WorkerLevelFixtures>({
     await deviceProvider.syncTestDetails?.({ name: testInfo.title });
     await use(device);
     await device.close();
-    if (deviceProviderName === 'emulator' || deviceProviderName === 'local-device') {
-      await stopAppiumServer();
-    }
     await deviceProvider.syncTestDetails?.({
       name: testInfo.title,
       status: testInfo.status,
@@ -89,9 +85,9 @@ export const test = base.extend<TestLevelFixtures, WorkerLevelFixtures>({
   },
   persistentDevice: [
     async ({}, use, workerInfo) => {
-      const { project, workerIndex } = workerInfo;
+      const { project, workerIndex, parallelIndex } = workerInfo;
       const beforeSession = new Date();
-      const deviceProvider = createDeviceProvider(project);
+      const deviceProvider = createDeviceProvider(project, parallelIndex);
       const device = await deviceProvider.getDevice();
       const sessionId = deviceProvider.sessionId;
       if (!sessionId) {

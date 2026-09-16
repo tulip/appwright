@@ -33,8 +33,6 @@ export class WorkerInfoStore {
     if (!fs.existsSync(this.basePath)) {
       fs.mkdirSync(this.basePath, { recursive: true });
     }
-    // TODO: can we make this file path unique for a session?
-    // will avoidd ios/android running into issues when running concurrently on local
     fs.writeFileSync(
       path.join(this.basePath, `worker-info-${idx}.json`),
       JSON.stringify(contents, null, 2),

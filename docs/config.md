@@ -166,3 +166,184 @@ To check for available iOS simulators, run the following command:
 ```sh
 xcrun simctl list
 ```
+
+## Running on multiple local devices
+
+Appwright runs one Playwright worker per device: every worker (`parallelIndex` 0, 1, 2, ...) opens
+its own Appium session on the device with the same index in the project's `device.devices` list.
+This works for both `provider: "local-device"` and `provider: "emulator"`.
+
+Each entry in `devices` has:
+
+- `udid` (required): the device identifier. For Android physical devices this is the adb serial
+  (`adb devices`); for Android emulators it is `emulator-<port>` where the port is an even number
+  between 5554 and 5584 (the console port range the emulator binary uses); for iOS physical devices
+  it is the UDID from `xcrun xctrace list devices`; for iOS simulators it is the simulator UDID from
+  `xcrun simctl list devices`.
+- `avd` (optional, `emulator` provider, Android only): the AVD name from
+  `$ANDROID_HOME/emulator/emulator -list-avds`. Appwright boots this AVD on the port taken from
+  `udid` when that emulator is not already running.
+
+A single `udid` on the device config is still accepted and is shorthand for
+`devices: [{ udid }]`. Leaving both out keeps the old behaviour of picking the only connected
+device, but then only one worker can run.
+
+Rules to keep in mind:
+
+- `workers` must not exceed the number of entries in `devices`. When `devices` is listed,
+  Appwright checks this in global setup and fails fast with a message telling you to add devices
+  or lower `workers`, before any session is opened. Configs that use the single-`udid` shorthand
+  (or neither) are left to the old behaviour: they keep running as long as Playwright spawns one
+  worker, and the second worker fails when it asks for a device it has not been given.
+- The worker slot is Playwright's `parallelIndex`, not `workerIndex`. When Playwright restarts a
+  worker after a failure the new worker reuses the same `parallelIndex`, so a retried test runs on
+  the same device as the original attempt.
+- One Appium server is started per run on a free port (4723 if available, otherwise the next free
+  one) and shut down when the run ends. If the port is grabbed by another process between the
+  check and the start, Appwright retries once on a fresh port. Workers only create and delete sessions on it; Appium is no
+  longer restarted after every test. The Appium driver is installed once, and skipped if it is
+  already installed.
+- Ports that must be unique per concurrent session on one host (`systemPort` on Android;
+  `wdaLocalPort`, `mjpegServerPort` and `derivedDataPath` on iOS) are derived from the worker slot
+  automatically, so you do not need to set them.
+- Emulators and simulators that Appwright booted for the run are shut down at the end. Emulators
+  and simulators that were already running when the run started are left alone.
+- iOS simulators listed by `udid` are booted with `xcrun simctl` if they are not already booted.
+
+### Example: two Android emulators
+
+```typescript
+import { defineConfig, Platform } from "appwright";
+
+export default defineConfig({
+  workers: 2,
+  projects: [
+    {
+      name: "android",
+      use: {
+        platform: Platform.ANDROID,
+        device: {
+          provider: "emulator",
+          devices: [
+            { udid: "emulator-5554", avd: "Pixel_7_API_34" },
+            { udid: "emulator-5556", avd: "Pixel_7_API_34" },
+          ],
+        },
+        buildPath: "android/app/build/outputs/apk/release/app-release.apk",
+      },
+    },
+  ],
+});
+```
+
+Worker 0 uses `emulator-5554` and worker 1 uses `emulator-5556`. The same AVD can back several
+entries; each one is booted as a separate emulator instance on its own port. The Android emulator
+only allows this when all instances of that AVD run with `-read-only`, so Appwright adds the flag
+to every instance of a shared AVD (their disk changes are discarded on shutdown). An
+entry without `avd` that is not already running boots the first installed AVD, with a warning.
+
+### Example: two iOS physical devices
+
+```typescript
+import { defineConfig, Platform } from "appwright";
+
+export default defineConfig({
+  workers: 2,
+  projects: [
+    {
+      name: "ios",
+      use: {
+        platform: Platform.IOS,
+        device: {
+          provider: "local-device",
+          devices: [
+            { udid: "00008110-000A1B2C3D4E5F67" },
+            { udid: "00008120-001122334455AABB" },
+          ],
+          updatedWDABundleId: "co.company.WebDriverAgentRunner",
+        },
+        buildPath: "ios/build/MyApp.ipa",
+      },
+    },
+  ],
+});
+```
+
+Find the UDIDs with `xcrun xctrace list devices`. Both devices must be connected and trusted before
+the run starts; Appwright does not boot or pair physical devices.
+
+## Test results per run
+
+Every run writes into its own folders, so two runs started side by side on one machine (for
+example iOS and Android at the same time) never overwrite each other's output:
+
+```
+test-results/<run>/               Playwright output: per-test artifacts, .last-run.json
+test-results/<run>/videos-store/  Appwright worker videos and worker-info files
+playwright-report/<run>/          HTML report
+blob-report/<run>/                Blob report, when the blob reporter is enabled
+```
+
+Open a report with `npx playwright show-report playwright-report/<run>`. Global setup logs the
+folders of the current run when it starts.
+
+### Naming a run
+
+- `npx appwright test --project android --run-name nightly` names the run `nightly`. The flag is
+  handled by the appwright CLI and is not passed on to Playwright.
+- `APPWRIGHT_RUN_NAME=nightly npx appwright test --project android` does the same through the
+  environment, which is convenient in CI. The flag wins when both are given.
+- Without either, the run is named `<project>-<YYYYMMDD>-<HHmmss>-<4 random chars>` in local time,
+  for example `android-20260910-143201-k3x9`. Several `--project` values are joined with `+`.
+
+Names are used as folder names, so anything other than letters, digits, `.`, `_`, `-` and `+` is
+replaced with `-`, and leading dots are removed.
+
+### Interaction with Playwright options
+
+- A custom `outputDir` or html `outputFolder` in your config is kept as the base folder; the run
+  name is nested under it (`<outputDir>/<run>`).
+- Playwright's own `--output <dir>` flag still overrides `outputDir` completely, as it always has.
+- `--last-failed` reads `.last-run.json` from the run's output folder. To rerun the failures of an
+  earlier run, pass the same `--run-name` again.
+- Reporters that own a whole folder are namespaced automatically: the html reporter
+  (`playwright-report/<run>`) and the blob reporter (`blob-report/<run>`). Both wipe their folder
+  when they write a report, so without this the second run to finish would delete the first run's
+  report. Merge blob reports from a run with
+  `npx playwright merge-reports blob-report/<run>`, or collect the `.zip` files of several runs
+  into one folder first.
+- Reporters that write a single file to a path you chose (`json`, `junit`) are left exactly where
+  their options point, because silently moving a path your CI reads would be worse than the
+  collision it avoids. Two concurrent runs do still overwrite each other there, so put the run name
+  in the path yourself when you need those side by side:
+
+  ```ts
+  import { defineConfig, resolveRunName } from "appwright";
+
+  const run = resolveRunName();
+
+  export default defineConfig({
+    reporter: [
+      ["list"],
+      ["html"],
+      ["json", { outputFile: `test-results/${run}/results.json` }],
+    ],
+    // ...
+  });
+  ```
+
+- Run folders are never deleted automatically. Remove `test-results/` and `playwright-report/` when
+  you want the disk space back.
+
+### Upgrading from a flat layout
+
+Before this change every run wrote straight into `test-results/` and `playwright-report/`. Results
+are now one level deeper, under the run folder. Update anything that reads a fixed path — CI
+artifact globs, `npx playwright show-report`, scripts that open `playwright-report/index.html` — to
+include the run folder, and pass `--run-name <name>` when you want that folder to have a known,
+stable name:
+
+```sh
+npx appwright test --project android --run-name ci
+npx playwright show-report playwright-report/ci
+```

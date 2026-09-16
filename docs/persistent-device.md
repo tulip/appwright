@@ -31,7 +31,10 @@ where it is set to `false`. This means test files are run in parallel, but tests
 run sequentially.
 
 You can set `fullyParallel: true` for your tests. This will create 1 or more workers,
-each with a `persistentDevice`.
+each with a `persistentDevice`. When running locally (`local-device` or `emulator` provider),
+each worker gets its own device from the project's `device.devices` list, so `workers` can be at
+most the number of entries there; see
+[Running on multiple local devices](config.md#running-on-multiple-local-devices).
 
 ### Structuring tests
 

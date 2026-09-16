@@ -22,9 +22,12 @@ export interface DeviceProvider {
   sessionId?: string;
 
   /**
-   * Global setup validates the configuration.
+   * Global setup validates the configuration and prepares devices.
+   *
+   * @param options.workers number of Playwright workers for this run; providers may use it to
+   * decide how many configured devices to prepare (e.g. how many emulators to boot).
    */
-  globalSetup?(): Promise<void>;
+  globalSetup?(options?: { workers: number }): Promise<void>;
 
   /**
    * Returns a device instance.
@@ -55,6 +58,30 @@ export type DeviceConfig =
   | LambdaTestConfig
   | LocalDeviceConfig
   | EmulatorConfig;
+
+/**
+ * One physical device, emulator or simulator that a project can drive.
+ *
+ * Devices are assigned to Playwright workers by position: worker slot `n`
+ * (Playwright's `parallelIndex`) always uses `devices[n]`.
+ */
+export type DeviceEntry = {
+  /**
+   * Unique device identifier.
+   * - Android physical device: adb serial (see `adb devices`)
+   * - Android emulator: `emulator-<port>` with an even port in 5554..5584
+   * - iOS physical device: UDID (see `xcrun xctrace list devices`)
+   * - iOS simulator: simulator UDID (see `xcrun simctl list devices`)
+   */
+  udid: string;
+
+  /**
+   * **Emulator provider, Android only**: name of the AVD to boot when `udid` is not online
+   * when the run starts (see `emulator -list-avds`). Emulators booted by Appwright are shut down
+   * at the end of the run; emulators that were already running are left alone.
+   */
+  avd?: string;
+};
 
 /**
  * Configuration options for app reset behavior between test sessions.
@@ -152,8 +179,16 @@ export type LocalDeviceConfig = {
 
   /**
    * The unique device identifier (UDID) of the connected local device.
+   * Shorthand for `devices: [{ udid }]`.
    */
   udid?: string;
+
+  /**
+   * Devices available to this project, one per Playwright worker. Worker slot `n`
+   * (`parallelIndex`) uses `devices[n]`. `workers` in the config must not exceed the
+   * number of entries.
+   */
+  devices?: DeviceEntry[];
 
   /**
    * The orientation of the device.
@@ -188,8 +223,17 @@ export type EmulatorConfig = {
 
   /**
    * The unique device identifier (UDID) of the emulator.
+   * Shorthand for `devices: [{ udid }]`.
    */
   udid?: string;
+
+  /**
+   * Emulators/simulators available to this project, one per Playwright worker. Worker slot `n`
+   * (`parallelIndex`) uses `devices[n]`. Android entries may carry an `avd` name so Appwright can
+   * boot the emulator when it is not already running. `workers` in the config must not exceed the
+   * number of entries.
+   */
+  devices?: DeviceEntry[];
 
   /**
    * The orientation of the emulator.

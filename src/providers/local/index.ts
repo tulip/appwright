@@ -15,15 +15,19 @@ import {
   getApkDetails,
   getAppBundleId,
   getConnectedIOSDeviceUDID,
-  installDriver,
-  startAppiumServer,
+  isAppiumHealthy,
 } from '../appium';
+import { getAppiumPort, getDeviceEntryForSlot, getSlotCapabilities } from '../slots';
 
 export class LocalDeviceProvider implements DeviceProvider {
   sessionId?: string;
   private cachedPackageName?: string;
 
-  constructor(private project: FullProject<AppwrightConfig>, appBundleId: string | undefined) {
+  constructor(
+    private project: FullProject<AppwrightConfig>,
+    appBundleId: string | undefined,
+    private slot: number = 0,
+  ) {
     if (appBundleId) {
       logger.log(`Bundle id is specified (${appBundleId}) but ignored for local device provider.`);
     }
@@ -33,7 +37,8 @@ export class LocalDeviceProvider implements DeviceProvider {
     return await this.createDriver();
   }
 
-  async globalSetup() {
+  async globalSetup(options?: { workers: number }) {
+    void options;
     validateBuildPath(
       this.project.use.buildPath,
       this.project.use.platform == Platform.ANDROID ? '.apk' : '.ipa',
@@ -51,12 +56,15 @@ export class LocalDeviceProvider implements DeviceProvider {
   }
 
   private async createDriver(): Promise<Device> {
-    await installDriver(
-      this.project.use.platform == Platform.ANDROID ? 'uiautomator2' : 'xcuitest',
-    );
-    await startAppiumServer(this.project.use.device?.provider!);
+    const config = await this.createConfig();
+    if (!(await isAppiumHealthy(config.port))) {
+      throw new Error(
+        `Appium server on port ${config.port} is not responding. The shared server started by ` +
+          'globalSetup may have crashed; check the Appium logs above.',
+      );
+    }
     const WebDriver = (await import('webdriver')).default;
-    const webDriverClient = await WebDriver.newSession(await this.createConfig());
+    const webDriverClient = await WebDriver.newSession(config);
     this.sessionId = webDriverClient.sessionId;
 
     let bundleId: string;
@@ -74,7 +82,8 @@ export class LocalDeviceProvider implements DeviceProvider {
   }
 
   private async createConfig() {
-    const platformName = this.project.use.platform;
+    const platformName = this.project.use.platform!;
+    const deviceConfig = this.project.use.device as LocalDeviceConfig;
     let appPackageName: string | undefined;
     let appLaunchableActivity: string | undefined;
 
@@ -84,22 +93,28 @@ export class LocalDeviceProvider implements DeviceProvider {
       appLaunchableActivity = launchableActivity!;
       this.cachedPackageName = packageName;
     }
-    let udid = (this.project.use.device as LocalDeviceConfig).udid;
-    if (!udid) {
+
+    // Device for this worker slot. `undefined` only when nothing is configured and slot is 0
+    // (legacy behaviour: auto-pick a connected device).
+    const entry = getDeviceEntryForSlot(deviceConfig, this.slot);
+    let udid: string | undefined;
+    if (entry) {
+      udid = entry.udid;
+    } else {
       if (platformName == Platform.IOS) {
         udid = await getConnectedIOSDeviceUDID(this.project.use.device?.name);
       } else {
         const activeAndroidDevices = await getActiveAndroidDevices();
         if (activeAndroidDevices > 1) {
           logger.warn(
-            `Multiple active devices detected. Selecting one for the test. 
+            `Multiple active devices detected. Selecting one for the test.
 To specify a device, use the udid property. Run "adb devices" to get the UDID for active devices.`,
           );
         }
       }
     }
     return {
-      port: 4723,
+      port: getAppiumPort(),
       capabilities: {
         'appium:deviceName': this.project.use.device?.name,
         'appium:udid': udid,
@@ -113,19 +128,20 @@ To specify a device, use the udid property. Run "adb devices" to get the UDID fo
         'appium:deviceOrientation': this.project.use.device?.orientation,
         'appium:settings[snapshotMaxDepth]': 62,
 
-        'appium:fullReset':
-          (this.project.use.device as LocalDeviceConfig).uninstallAppBeforeTest ?? false,
-        'appium:noReset': (this.project.use.device as LocalDeviceConfig).preserveAppState ?? true,
+        'appium:fullReset': deviceConfig.uninstallAppBeforeTest ?? false,
+        'appium:noReset': deviceConfig.preserveAppState ?? true,
 
         'appium:newCommandTimeout': 300,
+
+        // Ports/paths that must be unique per concurrent session on this host.
+        ...getSlotCapabilities(platformName, this.slot),
 
         ...(platformName == Platform.IOS && {
           'appium:wdaLaunchTimeout': 600_000,
           'appium:useNewWDA': false,
           'appium:iosInstallPause': 5000,
-          ...((this.project.use.device as LocalDeviceConfig).updatedWDABundleId && {
-            'appium:updatedWDABundleId': (this.project.use.device as LocalDeviceConfig)
-              .updatedWDABundleId,
+          ...(deviceConfig.updatedWDABundleId && {
+            'appium:updatedWDABundleId': deviceConfig.updatedWDABundleId,
           }),
         }),
 
