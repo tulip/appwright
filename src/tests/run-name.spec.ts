@@ -15,6 +15,7 @@ import {
   resolveOutputDir,
   resolveRunName,
   RUN_NAME_ENV,
+  runBlobDir,
   runOutputDir,
   runReportDir,
   sanitizeRunName,
@@ -182,6 +183,16 @@ describe('resolveRunName', () => {
   });
 });
 
+describe('runBlobDir', () => {
+  test('nests the run name under the default base', () => {
+    expect(runBlobDir('smoke')).toBe(path.join('blob-report', 'smoke'));
+  });
+
+  test('nests the run name under a custom base', () => {
+    expect(runBlobDir('smoke', 'blobs')).toBe(path.join('blobs', 'smoke'));
+  });
+});
+
 describe('runOutputDir / runReportDir', () => {
   test('nest the run name under the default folders', () => {
     expect(runOutputDir('smoke')).toBe(path.join('test-results', 'smoke'));
@@ -221,18 +232,37 @@ describe('applyRunNameToReporters', () => {
     ).toEqual([['html', { open: 'never', outputFolder: path.join('reports', 'smoke') }]]);
   });
 
-  test('leaves other reporters and their order untouched', () => {
+  test('adds outputDir to a blob entry without options', () => {
+    expect(applyRunNameToReporters([['blob']], 'smoke')).toEqual([
+      ['blob', { outputDir: path.join('blob-report', 'smoke') }],
+    ]);
+  });
+
+  test('keeps existing blob options and nests a custom outputDir', () => {
+    expect(
+      applyRunNameToReporters([['blob', { fileName: 'r.zip', outputDir: 'blobs' }]], 'smoke'),
+    ).toEqual([['blob', { fileName: 'r.zip', outputDir: path.join('blobs', 'smoke') }]]);
+  });
+
+  test('leaves single-file reporters and the order untouched', () => {
     const custom = '/abs/path/to/reporter.js';
     expect(
       applyRunNameToReporters(
-        [[custom], ['list'], ['html', { open: 'always' }], ['json']],
+        [
+          [custom],
+          ['list'],
+          ['html', { open: 'always' }],
+          ['json', { outputFile: 'results.json' }],
+          ['junit', { outputFile: 'results.xml' }],
+        ],
         'smoke',
       ),
     ).toEqual([
       [custom],
       ['list'],
       ['html', { open: 'always', outputFolder: path.join('playwright-report', 'smoke') }],
-      ['json'],
+      ['json', { outputFile: 'results.json' }],
+      ['junit', { outputFile: 'results.xml' }],
     ]);
   });
 });

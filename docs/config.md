@@ -281,6 +281,7 @@ example iOS and Android at the same time) never overwrite each other's output:
 test-results/<run>/               Playwright output: per-test artifacts, .last-run.json
 test-results/<run>/videos-store/  Appwright worker videos and worker-info files
 playwright-report/<run>/          HTML report
+blob-report/<run>/                Blob report, when the blob reporter is enabled
 ```
 
 Open a report with `npx playwright show-report playwright-report/<run>`. Global setup logs the
@@ -305,10 +306,16 @@ replaced with `-`, and leading dots are removed.
 - Playwright's own `--output <dir>` flag still overrides `outputDir` completely, as it always has.
 - `--last-failed` reads `.last-run.json` from the run's output folder. To rerun the failures of an
   earlier run, pass the same `--run-name` again.
-- Only the html reporter's folder is namespaced automatically. Reporters that write to a path you
-  choose (`json`, `junit`) or to their own folder (`blob`) keep writing exactly where their options
-  say, so two concurrent runs still overwrite each other there. Put the run name in the path
-  yourself when you need those side by side:
+- Reporters that own a whole folder are namespaced automatically: the html reporter
+  (`playwright-report/<run>`) and the blob reporter (`blob-report/<run>`). Both wipe their folder
+  when they write a report, so without this the second run to finish would delete the first run's
+  report. Merge blob reports from a run with
+  `npx playwright merge-reports blob-report/<run>`, or collect the `.zip` files of several runs
+  into one folder first.
+- Reporters that write a single file to a path you chose (`json`, `junit`) are left exactly where
+  their options point, because silently moving a path your CI reads would be worse than the
+  collision it avoids. Two concurrent runs do still overwrite each other there, so put the run name
+  in the path yourself when you need those side by side:
 
   ```ts
   import { defineConfig, resolveRunName } from "appwright";

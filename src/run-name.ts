@@ -23,6 +23,8 @@ export const OUTPUT_DIR_ENV = 'APPWRIGHT_OUTPUT_DIR';
 export const DEFAULT_OUTPUT_DIR = 'test-results';
 /** The html reporter's default `outputFolder`; per-run folders are nested under it. */
 export const DEFAULT_REPORT_DIR = 'playwright-report';
+/** The blob reporter's default `outputDir`; per-run folders are nested under it. */
+export const DEFAULT_BLOB_DIR = 'blob-report';
 /** Sub-folder of the run's output dir that holds worker videos and worker-info files. */
 export const VIDEOS_STORE_DIR = 'videos-store';
 
@@ -196,6 +198,11 @@ export function runReportDir(runName: string, base: string = DEFAULT_REPORT_DIR)
   return path.join(base, runName);
 }
 
+/** blob reporter `outputDir` for a run: `<base>/<runName>`. */
+export function runBlobDir(runName: string, base: string = DEFAULT_BLOB_DIR): string {
+  return path.join(base, runName);
+}
+
 /**
  * Playwright accepts `reporter: 'html'` as well as `reporter: [['html', {...}]]`. Returns the
  * array form, or `undefined` when no reporter was configured.
@@ -213,8 +220,13 @@ export function normalizeReporters(
 }
 
 /**
- * Points every `html` reporter entry at `<its outputFolder or playwright-report>/<runName>`.
- * Other reporters and the order of the list are left untouched.
+ * Nests the run name into the output folder of every reporter that owns a whole directory:
+ * `html` (`outputFolder`) and `blob` (`outputDir`). Both wipe that directory when they write, so
+ * without this two concurrent runs destroy each other's report.
+ *
+ * Reporters that write a single file to a path the consumer picked (`json`, `junit`) are left
+ * alone: silently moving a path that CI reads would be worse than the collision it avoids.
+ * The order of the list is preserved.
  */
 export function applyRunNameToReporters(
   reporters: readonly ReporterDescription[],
@@ -222,16 +234,26 @@ export function applyRunNameToReporters(
 ): ReporterDescription[] {
   return reporters.map((entry): ReporterDescription => {
     const [name, options] = Array.isArray(entry) ? entry : [entry, undefined];
-    if (name !== 'html') {
-      return entry;
+    if (name === 'html') {
+      const htmlOptions = (options ?? {}) as { outputFolder?: string };
+      return [
+        'html',
+        {
+          ...htmlOptions,
+          outputFolder: runReportDir(runName, htmlOptions.outputFolder ?? DEFAULT_REPORT_DIR),
+        },
+      ];
     }
-    const htmlOptions = (options ?? {}) as { outputFolder?: string };
-    return [
-      'html',
-      {
-        ...htmlOptions,
-        outputFolder: runReportDir(runName, htmlOptions.outputFolder ?? DEFAULT_REPORT_DIR),
-      },
-    ];
+    if (name === 'blob') {
+      const blobOptions = (options ?? {}) as { outputDir?: string };
+      return [
+        'blob',
+        {
+          ...blobOptions,
+          outputDir: runBlobDir(runName, blobOptions.outputDir ?? DEFAULT_BLOB_DIR),
+        },
+      ];
+    }
+    return entry;
   });
 }
