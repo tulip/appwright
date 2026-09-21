@@ -1,3 +1,4 @@
+import path from 'path';
 import type { Client as WebDriverClient } from 'webdriver';
 import { z } from 'zod';
 
@@ -10,24 +11,45 @@ import { uploadImageToLambdaTest } from '../providers/lambdatest/utils';
 import {
   AppwrightLocator,
   ExtractType,
+  LabelOptions,
+  NATIVE_CONTEXT,
+  OpenUrlOptions,
   Platform,
   TimeoutOptions,
+  WaitForAppToCloseOptions,
+  WaitForFileOptions,
 } from '../types';
-import {
-  boxedStep,
-  longestDeterministicGroup,
-} from '../utils';
-import {
-  AppwrightVision,
-  VisionProvider,
-} from '../vision';
+import { boxedStep, delay, escapeQuotes, escapeRegExp, longestDeterministicGroup } from '../utils';
+import { AppwrightVision, VisionProvider } from '../vision';
+
+/** Providers whose devices are in a cloud: a local build file cannot be installed on them. */
+const CLOUD_PROVIDERS = ['browserstack', 'lambdatest'];
+
+/** Only this provider keeps an iOS app's data container where `mobile: clearApp` can reach it. */
+const IOS_SIMULATOR_PROVIDER = 'emulator';
+
+/** Public, so a pull from here needs no `run-as`. */
+const ANDROID_DOWNLOADS_DIR = '/sdcard/Download';
+
+const IOS_EDITABLE_TYPES = [
+  'XCUIElementTypeTextField',
+  'XCUIElementTypeSecureTextField',
+  'XCUIElementTypeTextView',
+];
+
+function trimLeadingSlashes(relativePath: string): string {
+  return relativePath.replace(/^\/+/, '');
+}
 
 export class Device {
   constructor(
     private webDriverClient: WebDriverClient,
+    /** The app under test, read off the build. Not the foreground app. */
     private bundleId: string | undefined,
     private timeoutOpts: TimeoutOptions,
     private provider: string,
+    /** The project's `buildPath`, so `reinstallApp()` needs no argument. */
+    private buildPath?: string,
   ) {}
 
   /**
@@ -39,12 +61,22 @@ export class Device {
     selector,
     findStrategy,
     textToMatch,
+    web = false,
   }: {
     selector: string;
     findStrategy: string;
     textToMatch?: string | RegExp;
+    /** Set by `WebView`: the locator resolves in a WEBVIEW context and edits through the DOM. */
+    web?: boolean;
   }): AppwrightLocator {
-    return new Locator(this.webDriverClient, this.timeoutOpts, selector, findStrategy, textToMatch);
+    return new Locator(
+      this.webDriverClient,
+      this.timeoutOpts,
+      selector,
+      findStrategy,
+      textToMatch,
+      web,
+    );
   }
 
   /**
@@ -53,7 +85,7 @@ export class Device {
   private async ensureNativeContext(): Promise<void> {
     const currentContext = await this.getCurrentContext();
     console.log('[Device] Current context:', currentContext);
-    if (currentContext !== 'NATIVE_APP') {
+    if (currentContext !== NATIVE_CONTEXT) {
       console.log('[Device] Switching to NATIVE_APP context');
       await this.switchToNativeContext();
     }
@@ -220,22 +252,23 @@ export class Device {
         });
       }
     }
-    let path: string;
+    const quoted = escapeQuotes(text);
+    let selector: string;
     if (isAndroid) {
-      path = exact ? `text("${text}")` : `textContains("${text}")`;
+      selector = exact ? `text("${quoted}")` : `textContains("${quoted}")`;
     } else {
-      path = exact ? `label == "${text}"` : `label CONTAINS "${text}"`;
+      selector = exact ? `label == "${quoted}"` : `label CONTAINS "${quoted}"`;
     }
     return this.locator({
-      selector: path,
+      selector,
       findStrategy: isAndroid ? '-android uiautomator' : '-ios predicate string',
       textToMatch: text,
     });
   }
 
   /**
-   * Locate an element on the screen with accessibility identifier. This method defaults to
-   * a substring match, and this can be overridden by setting the `exact` option to `true`.
+   * Locate an element on the screen with accessibility identifier (`resource-id` on Android,
+   * `name` on iOS). Defaults to an exact match; set `exact: false` for a substring match.
    *
    * **Usage:**
    * ```js
@@ -246,18 +279,62 @@ export class Device {
    * @param options
    * @returns
    */
-  getById(text: string, { exact = false }: { exact?: boolean } = {}): AppwrightLocator {
+  getById(text: string, { exact = true }: { exact?: boolean } = {}): AppwrightLocator {
     const isAndroid = this.getPlatform() == Platform.ANDROID;
-    let path: string;
+    let selector: string;
     if (isAndroid) {
-      path = exact ? `resourceId("${text}")` : `resourceIdMatches("${text}")`;
+      // `resourceIdMatches` takes a regular expression, so the id is escaped to match literally.
+      selector = exact
+        ? `resourceId("${escapeQuotes(text)}")`
+        : `resourceIdMatches("${escapeQuotes(`.*${escapeRegExp(text)}.*`)}")`;
     } else {
-      path = exact ? `name == "${text}"` : `name CONTAINS "${text}"`;
+      const quoted = escapeQuotes(text);
+      selector = exact ? `name == "${quoted}"` : `name CONTAINS "${quoted}"`;
     }
     return this.locator({
-      selector: path,
+      selector,
       findStrategy: isAndroid ? '-android uiautomator' : '-ios predicate string',
       textToMatch: text,
+    });
+  }
+
+  /**
+   * Locate an element by its accessibility label: `content-desc` on Android, `label` on iOS.
+   * React Native's `accessibilityLabel` lands here on both platforms. Neither `getByText()`
+   * (which reads `text` on Android) nor `getById()` (`resource-id`) can find a label-only element.
+   *
+   * Defaults to an exact match. Pass `editable: true` to restrict the match to text fields —
+   * on iOS a natively rendered web page repeats one label across the field's wrapper, its
+   * StaticText and the input itself, and a bare label match can land `fill()` on the StaticText.
+   *
+   * Prefer a `testID` (`getById()`) where the app exposes one: a label is user-facing copy and
+   * moves with wording and i18n changes.
+   *
+   * **Usage:**
+   * ```js
+   * await device.getByLabel("Station Name", { editable: true }).fill("Line 1");
+   * await expect(device.getByLabel("Settings")).toBeVisible();
+   * ```
+   */
+  getByLabel(
+    label: string,
+    { exact = true, editable = false }: LabelOptions = {},
+  ): AppwrightLocator {
+    const quoted = escapeQuotes(label);
+    if (this.getPlatform() == Platform.ANDROID) {
+      const method = exact ? 'description' : 'descriptionContains';
+      const className = editable ? '.classNameMatches(".*EditText")' : '';
+      return this.locator({
+        selector: `new UiSelector().${method}("${quoted}")${className}`,
+        findStrategy: '-android uiautomator',
+      });
+    }
+    const typeFilter = editable
+      ? ` AND type IN {${IOS_EDITABLE_TYPES.map((type) => `"${type}"`).join(', ')}}`
+      : '';
+    return this.locator({
+      selector: `label ${exact ? '==' : 'CONTAINS'} "${quoted}"${typeFilter}`,
+      findStrategy: '-ios predicate string',
     });
   }
 
@@ -291,12 +368,350 @@ export class Device {
     return isAndroid ? Platform.ANDROID : Platform.IOS;
   }
 
+  /**
+   * The app currently in the foreground — a browser, a system dialog, or the app under test.
+   * For the app under test itself, use `getAppBundleId()`.
+   *
+   * Leaves the session in the NATIVE_APP context: `mobile: getCurrentPackage` is a native
+   * command, and Appium routes it to chromedriver from a WEBVIEW context, where it fails.
+   */
   async getCurrentBundleId(): Promise<string> {
+    await this.ensureNativeContext();
     if (this.getPlatform() == Platform.ANDROID) {
       return await this.webDriverClient.executeScript('mobile: getCurrentPackage', []);
     }
     const { bundleId } = await this.webDriverClient.executeScript('mobile: activeAppInfo', []);
     return bundleId;
+  }
+
+  /**
+   * The bundle id (iOS) or package name (Android) of the app under test, read off the build.
+   * Unlike `getCurrentBundleId()`, this does not change when another app comes to the front.
+   *
+   * Throws when the provider could not determine it: the emulator and local-device providers
+   * read a real one off the build, BrowserStack reports the uploaded app's name instead.
+   */
+  getAppBundleId(): string {
+    if (!this.bundleId) {
+      throw new Error(
+        'The device has no bundle id for the app under test. The emulator and local-device ' +
+          "providers read a real one off the build; BrowserStack reports the uploaded app's name " +
+          'instead, and an empty string when it has none.',
+      );
+    }
+    return this.bundleId;
+  }
+
+  /**
+   * The appwright project's `provider`, e.g. `emulator`, `local-device`, `browserstack`. A
+   * simulator and a USB phone both report `Platform.IOS`; only this separates them.
+   */
+  getProvider(): string {
+    return this.provider;
+  }
+
+  /**
+   * Runs an Appium `mobile:` extension command that appwright does not wrap. Prefer the typed
+   * methods where one exists — they hide the per-driver argument names (`appId` on Android,
+   * `bundleId` on iOS).
+   *
+   * **Usage:**
+   * ```js
+   * await device.executeMobileCommand('mobile: shell', { command: 'ls', args: ['/sdcard'] });
+   * ```
+   */
+  async executeMobileCommand<T = unknown>(
+    command: string,
+    args: Record<string, unknown> = {},
+  ): Promise<T> {
+    return (await this.webDriverClient.executeScript(command, [args])) as T;
+  }
+
+  /** The argument name each driver uses for an application id in `mobile:` commands. */
+  private appIdArg(appId: string): Record<string, string> {
+    return this.getPlatform() == Platform.ANDROID ? { appId } : { bundleId: appId };
+  }
+
+  private isIosSimulator(): boolean {
+    return this.getPlatform() == Platform.IOS && this.provider === IOS_SIMULATOR_PROVIDER;
+  }
+
+  /**
+   * Whether `appId` is installed on the device.
+   */
+  async isAppInstalled(appId: string): Promise<boolean> {
+    return await this.webDriverClient.isAppInstalled(appId);
+  }
+
+  /**
+   * Wipes an app's data without uninstalling it: `pm clear` on Android, the data container on an
+   * iOS simulator. Defaults to the app under test.
+   *
+   * On Android, `pm clear` also revokes the app's runtime permissions; `resetAppData()` grants
+   * them back. iOS real devices have no reachable data container — use `reinstallApp()` there.
+   */
+  @boxedStep
+  async clearAppData(appId: string = this.getAppBundleId()): Promise<void> {
+    if (this.getPlatform() == Platform.IOS && !this.isIosSimulator()) {
+      throw new Error(
+        `Cannot clear the data of '${appId}' on a '${this.provider}' iOS device: only a ` +
+          'simulator exposes an app data container. Use reinstallApp() instead.',
+      );
+    }
+    await this.executeMobileCommand('mobile: clearApp', this.appIdArg(appId));
+  }
+
+  /**
+   * [Android] Grants every runtime permission `appId` declares. Restores what
+   * `appium:autoGrantPermissions` gave the app before a `pm clear` revoked it. A no-op on iOS,
+   * where permissions cannot be granted from outside the app.
+   */
+  @boxedStep
+  async grantAllPermissions(appId: string = this.getAppBundleId()): Promise<void> {
+    if (this.getPlatform() != Platform.ANDROID) {
+      logger.log(`grantAllPermissions: nothing to do on iOS for ${appId}.`);
+      return;
+    }
+    await this.executeMobileCommand('mobile: changePermissions', {
+      appPackage: appId,
+      permissions: 'all',
+      action: 'grant',
+    });
+  }
+
+  /**
+   * Uninstalls and reinstalls the app under test from the build, then brings it back to the
+   * foreground. Identical on both platforms, and usable mid-session — unlike
+   * `appium:fullReset`, which only applies at session creation and means "reinstall" on
+   * Android but "erase the simulator" on iOS.
+   *
+   * On Android the reinstall grants the app's runtime permissions, matching the
+   * `appium:autoGrantPermissions` the session was created with; a plain install would leave
+   * the next test facing a permission prompt.
+   *
+   * **Usage:**
+   * ```js
+   * test.beforeAll(async ({ device }) => {
+   *   await device.reinstallApp();
+   * });
+   * ```
+   *
+   * @param buildPath Defaults to the project's `buildPath`. Relative paths are resolved against
+   * the current working directory, not Appium's.
+   */
+  @boxedStep
+  async reinstallApp(buildPath: string | undefined = this.buildPath): Promise<void> {
+    if (CLOUD_PROVIDERS.includes(this.provider)) {
+      throw new Error(
+        `reinstallApp() is not supported on the '${this.provider}' provider: a local build ` +
+          'file cannot be installed on a cloud device. Configure the reset through the ' +
+          "provider's session capabilities instead.",
+      );
+    }
+    if (!buildPath) {
+      throw new Error(
+        'reinstallApp() needs a build path: none was given and the project has no `buildPath`.',
+      );
+    }
+
+    const appId = this.getAppBundleId();
+    const appPath = path.resolve(buildPath);
+
+    await this.terminateApp(appId);
+    await this.webDriverClient.removeApp(appId);
+    if (this.getPlatform() == Platform.ANDROID) {
+      await this.executeMobileCommand('mobile: installApp', { appPath, grantPermissions: true });
+    } else {
+      await this.webDriverClient.installApp(appPath);
+    }
+    // activateApp() switches back to NATIVE_APP: WEBVIEW context ids do not survive a reinstall.
+    await this.activateApp(appId);
+
+    logger.log(`Reinstalled ${appId} from ${appPath}.`);
+  }
+
+  /**
+   * Resets the app under test to a first-launch state without reinstalling it: terminate, wipe
+   * its data, grant its permissions back (Android), relaunch. Much faster than `reinstallApp()`
+   * when the build has not changed. iOS simulator only.
+   */
+  @boxedStep
+  async resetAppData(): Promise<void> {
+    const appId = this.getAppBundleId();
+    await this.terminateApp(appId);
+    await this.clearAppData(appId);
+    await this.grantAllPermissions(appId);
+    await this.activateApp(appId);
+    logger.log(`Reset the data of ${appId}.`);
+  }
+
+  /**
+   * Opens `url` the way a person tapping a link outside the app would: with the platform's
+   * default handler unless `app` names one. Returns the bundle id / package of the app that came
+   * to the foreground, so the caller can wait on exactly that app:
+   *
+   * ```js
+   * const browser = await device.openUrl(`${site}/login`);
+   * // …drive the browser via device.getByText(...)
+   * await device.waitForAppToClose(browser);
+   * await device.activateApp();
+   * ```
+   *
+   * The Appium session stays in the NATIVE_APP context, so locators resolve against the browser
+   * from here on. `webDriverClient.navigateTo()` is not the same thing: uiautomator2's `setUrl`
+   * passes the app under test as the intent's package, which deep-links *into* the app rather
+   * than out to a browser.
+   */
+  @boxedStep
+  async openUrl(url: string, { app }: OpenUrlOptions = {}): Promise<string> {
+    const target =
+      app == null
+        ? {}
+        : this.getPlatform() == Platform.ANDROID
+        ? { package: app }
+        : { bundleId: app };
+    const before = this.bundleId;
+
+    await this.executeMobileCommand('mobile: deepLink', { url, ...target });
+
+    // Whatever handled the URL takes a moment to reach the foreground.
+    const deadline = Date.now() + this.timeoutOpts.expectTimeout;
+    let foreground = await this.getCurrentBundleId();
+    while (foreground === before && Date.now() < deadline) {
+      await delay(500);
+      foreground = await this.getCurrentBundleId();
+    }
+
+    logger.log(`Opened ${url} in ${foreground}.`);
+    return foreground;
+  }
+
+  /**
+   * Blocks until `appId` is no longer the foreground app — a browser closing itself once an
+   * auth flow redirects back to the app, a system dialog being dismissed.
+   */
+  @boxedStep
+  async waitForAppToClose(
+    appId: string,
+    { timeout = 60_000, pollInterval = 1_000 }: WaitForAppToCloseOptions = {},
+  ): Promise<void> {
+    const deadline = Date.now() + timeout;
+    let foreground = await this.getCurrentBundleId();
+
+    while (foreground === appId && Date.now() < deadline) {
+      await delay(pollInterval);
+      foreground = await this.getCurrentBundleId();
+    }
+
+    if (foreground === appId) {
+      throw new Error(`${appId} was still in the foreground ${timeout}ms later.`);
+    }
+  }
+
+  /**
+   * A path inside the app under test's own data container, in the form Appium's file commands
+   * take: `@<package>/<relative>` on Android and `@<bundle>:data/<relative>` on iOS. The iOS
+   * container type matters: Appium defaults to `app`, the read-only bundle, while everything the
+   * app writes lives under `data`.
+   *
+   * Android container pulls go through `run-as`, which an emulator allows for any package but a
+   * real device allows only for a debuggable build. iOS container pulls are verified on the
+   * simulator; a real device supports the `documents` container alone.
+   */
+  appContainerPath(relativePath: string): string {
+    const appId = this.getAppBundleId();
+    const relative = trimLeadingSlashes(relativePath);
+    return this.getPlatform() == Platform.ANDROID
+      ? `@${appId}/${relative}`
+      : `@${appId}:data/${relative}`;
+  }
+
+  /** The app's documents directory (`files/` on Android, `Documents/` on iOS). */
+  appDocumentsPath(relativePath = ''): string {
+    return this.appContainerPath(this.platformRelativePath('files', 'Documents', relativePath));
+  }
+
+  /** The app's cache directory (`cache/` on Android, `Library/Caches/` on iOS). */
+  appCachePath(relativePath = ''): string {
+    return this.appContainerPath(
+      this.platformRelativePath('cache', 'Library/Caches', relativePath),
+    );
+  }
+
+  /**
+   * [Android] A path in the shared downloads directory, readable without `run-as`. iOS has no
+   * public downloads directory: read a file the app wrote through `appDocumentsPath()`, or drive
+   * the share sheet to a destination the test controls.
+   */
+  publicDownloadsPath(relativePath: string): string {
+    if (this.getPlatform() != Platform.ANDROID) {
+      throw new Error(
+        'iOS has no public downloads directory. Use appDocumentsPath() to reach a file the app ' +
+          'itself wrote, or drive the share sheet to a destination the test controls.',
+      );
+    }
+    return `${ANDROID_DOWNLOADS_DIR}/${trimLeadingSlashes(relativePath)}`;
+  }
+
+  private platformRelativePath(androidRoot: string, iosRoot: string, relativePath: string): string {
+    const root = this.getPlatform() == Platform.ANDROID ? androidRoot : iosRoot;
+    const relative = trimLeadingSlashes(relativePath);
+    return relative === '' ? root : `${root}/${relative}`;
+  }
+
+  /**
+   * Reads a file off the device. `remotePath` is a device path or a container path from
+   * `appContainerPath()` and friends.
+   *
+   * **Usage:**
+   * ```js
+   * const pdf = await device.pullFile(device.appCachePath('print/out.pdf'));
+   * ```
+   */
+  @boxedStep
+  async pullFile(remotePath: string): Promise<Buffer> {
+    const base64 = await this.webDriverClient.pullFile(remotePath);
+    return Buffer.from(base64, 'base64');
+  }
+
+  /**
+   * Polls `pullFile()` until the file exists and `isReady` accepts its contents (by default:
+   * it is non-empty). Neither driver distinguishes a missing file from a transport fault, so
+   * every error is retried and only the last one is reported.
+   *
+   * **Usage:**
+   * ```js
+   * const pdf = await device.waitForFile(device.appCachePath('print/out.pdf'), {
+   *   isReady: (contents) => contents.subarray(-1024).includes('%%EOF'),
+   * });
+   * ```
+   */
+  @boxedStep
+  async waitForFile(
+    remotePath: string,
+    {
+      timeout = 15_000,
+      pollInterval = 500,
+      isReady = (contents) => contents.length > 0,
+    }: WaitForFileOptions = {},
+  ): Promise<Buffer> {
+    const deadline = Date.now() + timeout;
+    let reason = 'it was never attempted';
+
+    do {
+      try {
+        const contents = await this.pullFile(remotePath);
+        if (isReady(contents)) {
+          return contents;
+        }
+        reason = `the file exists but is not ready (${contents.length} bytes)`;
+      } catch (error) {
+        reason = error instanceof Error ? error.message : String(error);
+      }
+      await delay(pollInterval);
+    } while (Date.now() < deadline);
+
+    throw new Error(`Could not pull '${remotePath}' within ${timeout}ms: ${reason}`);
   }
 
   /**
@@ -410,8 +825,8 @@ export class Device {
 
   /**
    * **[DEBUGGING ONLY]** Pauses test execution indefinitely to allow manual inspection via Appium Inspector.
-   * 
-   * WARNING: This function runs an infinite loop and will NEVER complete. 
+   *
+   * WARNING: This function runs an infinite loop and will NEVER complete.
    * Use only for debugging - remove before committing tests.
    * Automatically skipped in CI (when CI=true environment variable is set).
    *
@@ -441,7 +856,7 @@ export class Device {
 
   /**
    * Waits for the specified amount of time (in milliseconds) before continuing.
-   * 
+   *
    * WARNING: There is a command timeout of 5 minutes for local-device and emulator and a
    * one minute timeout for all others.
    * If you wait longer than this without any other commands, the session will timeout.
@@ -451,7 +866,7 @@ export class Device {
    * ```js
    * await device.waitForTimeout(5000); // Wait 5 seconds
    * ```
-   * 
+   *
    * @param timeout Time to wait in milliseconds
    */
   @boxedStep
@@ -550,7 +965,7 @@ export class Device {
   }
 
   private async switchToNativeContext(): Promise<void> {
-    await this.switchContext('NATIVE_APP');
+    await this.switchContext(NATIVE_CONTEXT);
   }
 
   /**

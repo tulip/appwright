@@ -240,5 +240,6 @@ npx appwright test --project ios
 - [Basics](docs/basics.md)
 - [Configuration](docs/config.md)
 - [Locators](docs/locators.md)
+- [Device: app lifecycle, files, URLs](docs/device.md)
 - [Assertions](docs/assertions.md)
 - [API reference](docs/api-reference.md)
