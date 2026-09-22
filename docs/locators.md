@@ -78,6 +78,8 @@ await device.getByText('Submit').tap();
 
 To enter text into an element, you can use the `fill` method. It **replaces** the field's contents: it taps the field, clears it, types the value and reads it back, retrying once if the field did not take the whole value (iOS drops leading characters when a field takes focus mid-send).
 
+Because `fill` taps the field first, the software keyboard is usually up afterwards. On Android that matters: some screens ignore the first tap outside a focused field (it only dismisses the keyboard), and the keyboard can cover controls near the bottom of the screen. Submit with `press('Enter')`, or dismiss the keyboard before tapping the next control.
+
 ```ts
 await device.getByText('Search').fill('Wikipedia');
 ```
@@ -97,7 +99,7 @@ expect(await device.getByText('Search').inputValue()).toBe('');
 
 ### Pressing a key
 
-To submit a field with the keyboard's Return key, or send a single key without clearing the field, use `press`. `Enter` and `Tab` are mapped to the newline and tab characters; anything else is sent as typed.
+To submit a field with the keyboard's Return key, or send a key without clearing the field, use `press`. `Enter` and `Tab` are named keys; anything else is typed character by character. On a native Android field `press` sends real key events, because UiAutomator2's text entry replaces the field's contents (a `"\n"` typed there leaves a single space and submits nothing).
 
 ```ts
 await device.getByText('Search').fill('Wikipedia');

@@ -27,7 +27,9 @@ that came to the foreground; `device.waitForAppToClose()` waits for it to go awa
 
 - `fill()` now **replaces** a field's contents (tap, clear, type, read back) instead of appending
   to them. Anything that used `fill` to append — in particular `fill('\n')` to press Return — must
-  become `press('Enter')`. A manual clear before `fill` is no longer needed. Pass
+  become `press('Enter')`, which on Android sends a real Enter key event (typing `"\n"` there
+  replaced the field's text with a space). `fill` taps the field first, so the software keyboard
+  is usually up afterwards. A manual clear before `fill` is no longer needed. Pass
   `{ secret: true }` for passwords so the value stays out of appwright's step titles and error
   messages (the `webdriver` request log is unaffected).
 - `getById()` defaults to an **exact** match. Pass `{ exact: false }` to keep substring matching

@@ -196,14 +196,42 @@ describe('clear / press / inputValue', () => {
     expect(client.executeScript).toHaveBeenCalledTimes(1);
   });
 
-  test('press never clears and maps named keys', async () => {
-    const client = mockClient();
+  test('press on native Android sends real key events and never clears', async () => {
+    const client = mockClient({
+      performActions: vi.fn().mockResolvedValue(undefined),
+      releaseActions: vi.fn().mockResolvedValue(undefined),
+    });
     const locator = nativeLocator(client);
     await locator.press('Enter');
     await locator.press('Tab');
-    await locator.press('a');
+    await locator.press('ab');
+
     expect(client.elementClear).not.toHaveBeenCalled();
-    expect(calls(client.elementSendKeys).map((c) => c[1])).toEqual(['\n', '\t', 'a']);
+    expect(client.elementSendKeys).not.toHaveBeenCalled();
+    expect(client.elementClick).toHaveBeenCalledTimes(3);
+    expect(calls(client.executeScript)).toEqual([
+      ['mobile: pressKey', [{ keycode: 66 }]],
+      ['mobile: pressKey', [{ keycode: 61 }]],
+    ]);
+    const [[actions]] = calls(client.performActions) as [[{ actions: unknown[] }[]]];
+    expect(actions[0]!.actions).toEqual([
+      { type: 'keyDown', value: 'a' },
+      { type: 'keyUp', value: 'a' },
+      { type: 'keyDown', value: 'b' },
+      { type: 'keyUp', value: 'b' },
+    ]);
+  });
+
+  test('press on iOS and in a WebView types the mapped character', async () => {
+    const ios = mockClient({ isAndroid: false });
+    await nativeLocator(ios).press('Enter');
+    expect(calls(ios.elementSendKeys)).toEqual([['element-id', '\n']]);
+    expect(ios.executeScript).not.toHaveBeenCalled();
+
+    const web = mockClient();
+    await webLocator(web).press('Tab');
+    expect(calls(web.elementSendKeys)).toEqual([['element-id', '\t']]);
+    expect(web.elementClear).not.toHaveBeenCalled();
   });
 
   test('inputValue on Android reads the text attribute and treats the hint as empty', async () => {

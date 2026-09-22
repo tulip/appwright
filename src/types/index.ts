@@ -371,9 +371,13 @@ export interface AppwrightLocator {
   clear(options?: ActionOptions): Promise<void>;
 
   /**
-   * Sends a key to the element without clearing it. `"Enter"` and `"Tab"` are mapped to the
-   * newline and tab characters; anything else is sent as-is. This is the way to submit a field
-   * with the keyboard's Return key.
+   * Presses a key in the element without clearing it. `"Enter"` and `"Tab"` are named keys;
+   * anything else is typed character by character. This is the way to submit a field with the
+   * keyboard's Return key.
+   *
+   * On a native Android field this sends real key events (after a tap to focus the field),
+   * because UiAutomator2's text entry replaces the field's contents. On iOS and in a WebView the
+   * key is typed into the element.
    *
    * **Usage:**
    * ```js

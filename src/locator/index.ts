@@ -37,6 +37,16 @@ const KEY_MAP: Record<string, string> = {
   Tab: '\t',
 };
 
+/**
+ * Android key codes for the named keys. On a native Android field `elementSendKeys` is
+ * UiAutomator2's `setText`, which *replaces* the text even with `replace: false` — a `"\n"` leaves
+ * the field holding a single space and presses nothing. A key event is the only real key press.
+ */
+const ANDROID_KEYCODES: Record<string, number> = {
+  Enter: 66,
+  Tab: 61,
+};
+
 type ElementState = 'attached' | 'visible' | 'hidden';
 
 export class Locator {
@@ -98,7 +108,32 @@ export class Locator {
   @boxedStep
   async press(key: string, options?: ActionOptions): Promise<void> {
     const elementId = await this.requireVisibleElementId('press', options);
-    await this.webDriverClient.elementSendKeys(elementId, KEY_MAP[key] ?? key);
+
+    if (this.isWeb || !this.webDriverClient.isAndroid) {
+      // chromedriver and XCUITest both type a "\n" as the Return key without touching the value.
+      await this.webDriverClient.elementSendKeys(elementId, KEY_MAP[key] ?? key);
+      return;
+    }
+
+    // Native Android: send key events to the focused field instead of setText (see
+    // ANDROID_KEYCODES). Tapping first puts focus on this element; it does not change the text.
+    await this.webDriverClient.elementClick(elementId);
+    const keycode = ANDROID_KEYCODES[key];
+    if (keycode != null) {
+      await this.webDriverClient.executeScript('mobile: pressKey', [{ keycode }]);
+      return;
+    }
+    await this.webDriverClient.performActions([
+      {
+        type: 'key',
+        id: 'keyboard',
+        actions: key.split('').flatMap((char) => [
+          { type: 'keyDown', value: char },
+          { type: 'keyUp', value: char },
+        ]),
+      },
+    ]);
+    await this.webDriverClient.releaseActions();
   }
 
   @boxedStep
