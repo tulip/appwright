@@ -5,6 +5,36 @@ import test from '@playwright/test';
 
 import { resolveOutputDir, VIDEOS_STORE_DIR } from './run-name';
 
+/**
+ * Whether any argument asks for its companions to be hidden from the step title. `fill(value,
+ * { secret: true })` is the case that matters: the title would otherwise carry a password into
+ * the Playwright report.
+ */
+function hasSecretOption(args: unknown[]): boolean {
+  return args.some(
+    (arg) =>
+      typeof arg === 'object' && arg !== null && (arg as { secret?: boolean }).secret === true,
+  );
+}
+
+function formatStepArgs(args: unknown[]): string {
+  if (!args.length) {
+    return '';
+  }
+  const mask = hasSecretOption(args);
+  const formatted = args.map((a) => (mask && typeof a === 'string' ? '"***"' : JSON.stringify(a)));
+  return '(' + formatted.join(' , ') + ')';
+}
+
+function isInsideTest(): boolean {
+  try {
+    test.info();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function boxedStep(target: Function, context: ClassMethodDecoratorContext) {
   return function replacementMethod(
     this: {
@@ -13,14 +43,13 @@ export function boxedStep(target: Function, context: ClassMethodDecoratorContext
     ...args: any
   ) {
     const path = this.selector ? `("${this.selector}")` : '';
-    const argsString = args.length
-      ? '(' +
-        Array.from(args)
-          .map((a) => JSON.stringify(a))
-          .join(' , ') +
-        ')'
-      : '';
+    const argsString = formatStepArgs(Array.from(args));
     const name = `${context.name as string}${path}${argsString}`;
+    if (!isInsideTest()) {
+      // Worker-scoped fixtures (`persistentDevice`) and unit tests call these methods with no
+      // test running, where `test.step()` throws. The step is only reporting; skip it.
+      return target.call(this, ...args);
+    }
     return test.step(
       name,
       async () => {
@@ -89,6 +118,22 @@ export function longestDeterministicGroup(pattern: RegExp): string | undefined {
 export function basePath() {
   return path.resolve(process.cwd(), resolveOutputDir(), VIDEOS_STORE_DIR);
 }
+
+/**
+ * Escapes a value for interpolation inside a double-quoted string in a UiAutomator selector,
+ * an iOS predicate string or a CSS attribute selector.
+ */
+export function escapeQuotes(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+/** Escapes a value so a regex-based matcher (`resourceIdMatches`) treats it literally. */
+export function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+export const delay = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
 
 export function isNoSuchWindowError(error: unknown): boolean {
   if (error instanceof Error) {

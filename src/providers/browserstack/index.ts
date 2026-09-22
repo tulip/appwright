@@ -146,7 +146,13 @@ export class BrowserStackDeviceProvider implements DeviceProvider {
     const testOptions = {
       expectTimeout: this.project.use.expectTimeout!,
     };
-    return new Device(webDriverClient, bundleId, testOptions, this.project.use.device?.provider!);
+    return new Device(
+      webDriverClient,
+      bundleId,
+      testOptions,
+      this.project.use.device?.provider!,
+      this.project.use.buildPath,
+    );
   }
 
   private async getSessionDetails() {

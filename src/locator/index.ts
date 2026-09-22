@@ -4,20 +4,50 @@ import { Client as WebDriverClient } from 'webdriver';
 
 import {
   ActionOptions,
+  ELEMENT_REFERENCE_ID,
   ElementReference,
+  FillOptions,
   ScrollDirection,
   TimeoutOptions,
   WebDriverErrors,
 } from '../types';
-import {
-  NonRetryableError,
-  RetryableError,
-  TimeoutError,
-} from '../types/errors';
-import {
-  boxedStep,
-  isNoSuchWindowError,
-} from '../utils';
+import { NonRetryableError, RetryableError, TimeoutError } from '../types/errors';
+import { boxedStep, isNoSuchWindowError } from '../utils';
+
+/**
+ * Empties an `<input>`/`<textarea>` the way React notices. chromedriver's `elementClear` fires
+ * only `change`, and a controlled input whose owner never saw the edit keeps its old state.
+ * Setting the value through the prototype setter and dispatching `input` is what React's change
+ * tracker listens for, so the owner's `onChange('')` runs before the typing.
+ */
+const WEB_CLEAR_SCRIPT = `
+  var el = arguments[0];
+  var proto = Object.getPrototypeOf(el);
+  var descriptor = proto ? Object.getOwnPropertyDescriptor(proto, 'value') : null;
+  if (descriptor && descriptor.set) { descriptor.set.call(el, ''); } else { el.value = ''; }
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+`;
+
+const WEB_VALUE_SCRIPT =
+  'var el = arguments[0]; return el && el.value != null ? String(el.value) : "";';
+
+/** Named keys `press()` understands; anything else is sent as typed. */
+const KEY_MAP: Record<string, string> = {
+  Enter: '\n',
+  Tab: '\t',
+};
+
+/**
+ * Android key codes for the named keys. On a native Android field `elementSendKeys` is
+ * UiAutomator2's `setText`, which *replaces* the text even with `replace: false` — a `"\n"` leaves
+ * the field holding a single space and presses nothing. A key event is the only real key press.
+ */
+const ANDROID_KEYCODES: Record<string, number> = {
+  Enter: 66,
+  Tab: 61,
+};
+
+type ElementState = 'attached' | 'visible' | 'hidden';
 
 export class Locator {
   constructor(
@@ -28,56 +58,111 @@ export class Locator {
     private findStrategy: string,
     // Used to filter elements received from Appium server
     private textToMatch?: string | RegExp,
+    /**
+     * Whether this locator resolves inside a WEBVIEW context. Clearing and reading an input
+     * differ between chromedriver (DOM) and the native drivers (element attributes).
+     */
+    private isWeb: boolean = false,
   ) {}
 
+  /**
+   * Replaces the element's contents with `value`.
+   *
+   * The sequence is the one that holds on both drivers: tap (XCUITest refuses keys to a field
+   * that never raised the keyboard), clear, type, then read the value back. iOS drops leading
+   * characters when a field takes focus mid-send, so a mismatch is retried once before it is
+   * reported.
+   */
   @boxedStep
-  async fill(value: string, options?: ActionOptions): Promise<void> {
-    const isElementDisplayed = await this.isVisible(options);
-    if (isElementDisplayed) {
-      const element = await this.getElement();
-      if (element) {
-        await this.webDriverClient.elementSendKeys(
-          element['element-6066-11e4-a52e-4f735466cecf'],
-          value,
-        );
-      } else {
-        throw new Error(`Failed to fill: Element "${this.selector}" is not found`);
+  async fill(value: string, options?: FillOptions): Promise<void> {
+    const secret = options?.secret === true;
+    const actionOptions = this.toActionOptions(options);
+    const elementId = await this.requireVisibleElementId('fill', actionOptions);
+
+    await this.webDriverClient.elementClick(elementId);
+
+    let entered = '';
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      await this.clearElement(elementId);
+      await this.webDriverClient.elementSendKeys(elementId, value);
+
+      entered = await this.readValue(elementId);
+      if (Locator.valueMatches(entered, value, secret)) {
+        return;
       }
-    } else {
-      throw new Error(`Failed to fill: Element "${this.selector}" not visible`);
     }
+
+    const got = secret ? `${entered.length} character(s)` : JSON.stringify(entered);
+    const expected = secret ? `${value.length} character(s)` : JSON.stringify(value);
+    throw new Error(
+      `Failed to fill: Element "${this.selector}" holds ${got} after filling ${expected}.`,
+    );
+  }
+
+  @boxedStep
+  async clear(options?: ActionOptions): Promise<void> {
+    const elementId = await this.requireVisibleElementId('clear', options);
+    await this.clearElement(elementId);
+  }
+
+  @boxedStep
+  async press(key: string, options?: ActionOptions): Promise<void> {
+    const elementId = await this.requireVisibleElementId('press', options);
+
+    if (this.isWeb || !this.webDriverClient.isAndroid) {
+      // chromedriver and XCUITest both type a "\n" as the Return key without touching the value.
+      await this.webDriverClient.elementSendKeys(elementId, KEY_MAP[key] ?? key);
+      return;
+    }
+
+    // Native Android: send key events to the focused field instead of setText (see
+    // ANDROID_KEYCODES). Tapping first puts focus on this element; it does not change the text.
+    await this.webDriverClient.elementClick(elementId);
+    const keycode = ANDROID_KEYCODES[key];
+    if (keycode != null) {
+      await this.webDriverClient.executeScript('mobile: pressKey', [{ keycode }]);
+      return;
+    }
+    await this.webDriverClient.performActions([
+      {
+        type: 'key',
+        id: 'keyboard',
+        actions: key.split('').flatMap((char) => [
+          { type: 'keyDown', value: char },
+          { type: 'keyUp', value: char },
+        ]),
+      },
+    ]);
+    await this.webDriverClient.releaseActions();
+  }
+
+  @boxedStep
+  async inputValue(options?: ActionOptions): Promise<string> {
+    const elementId = await this.requireVisibleElementId('inputValue', options);
+    return await this.readValue(elementId);
   }
 
   @boxedStep
   async sendKeyStrokes(value: string, options?: ActionOptions): Promise<void> {
-    const isElementDisplayed = await this.isVisible(options);
-    if (isElementDisplayed) {
-      const element = await this.getElement();
-      if (element) {
-        await this.webDriverClient.elementClick(element['element-6066-11e4-a52e-4f735466cecf']);
-        const actions = value
-          .split('')
-          .map((char) => [
-            { type: 'keyDown', value: char },
-            { type: 'keyUp', value: char },
-          ])
-          .flat();
+    const elementId = await this.requireVisibleElementId('sendKeyStrokes', options);
+    await this.webDriverClient.elementClick(elementId);
+    const actions = value
+      .split('')
+      .map((char) => [
+        { type: 'keyDown', value: char },
+        { type: 'keyUp', value: char },
+      ])
+      .flat();
 
-        await this.webDriverClient.performActions([
-          {
-            type: 'key',
-            id: 'keyboard',
-            actions: actions,
-          },
-        ]);
+    await this.webDriverClient.performActions([
+      {
+        type: 'key',
+        id: 'keyboard',
+        actions: actions,
+      },
+    ]);
 
-        await this.webDriverClient.releaseActions();
-      } else {
-        throw new Error(`Failed to sendKeyStrokes: Element "${this.selector}" is not found`);
-      }
-    } else {
-      throw new Error(`Failed to sendKeyStrokes: Element "${this.selector}" not visible`);
-    }
+    await this.webDriverClient.releaseActions();
   }
 
   async isVisible(options?: ActionOptions): Promise<boolean> {
@@ -92,32 +177,44 @@ export class Locator {
     }
   }
 
-  async waitFor(state: 'attached' | 'visible', options?: ActionOptions): Promise<void> {
+  async waitFor(state: ElementState, options?: ActionOptions): Promise<void> {
     const timeoutFromConfig = this.timeoutOpts.expectTimeout;
     const timeout = options?.timeout || timeoutFromConfig;
     const result = await this.waitUntil(async () => {
       const element = await this.getElement();
-      if (element && element['element-6066-11e4-a52e-4f735466cecf']) {
-        if (state === 'attached') {
-          return true;
-        } else if (state === 'visible') {
-          try {
-            const isDisplayed = await this.webDriverClient.isElementDisplayed(
-              element['element-6066-11e4-a52e-4f735466cecf'],
-            );
-            return isDisplayed;
-          } catch (error) {
-            //@ts-ignore
-            const errName = error.name;
-            if (errName && errName.includes(WebDriverErrors.StaleElementReferenceError)) {
-              throw new RetryableError(`Stale element detected: ${error}`);
-            }
-            throw error;
-          }
-        }
+      const elementId = element?.[ELEMENT_REFERENCE_ID];
+
+      if (!elementId) {
+        // Nothing matches: that is exactly 'hidden', and not yet 'attached' or 'visible'.
+        return state === 'hidden';
       }
-      return false;
-    }, timeout);
+
+      if (state === 'attached') {
+        return true;
+      }
+
+      let isDisplayed: boolean;
+      try {
+        isDisplayed = await this.webDriverClient.isElementDisplayed(elementId);
+      } catch (error) {
+        //@ts-ignore
+        const errName = error.name;
+        if (errName && errName.includes(WebDriverErrors.StaleElementReferenceError)) {
+          // A stale node is being re-rendered, not gone: re-find on the next tick for every
+          // state, so a transient stale read never counts as "hidden".
+          throw new RetryableError(`Stale element detected: ${error}`);
+        }
+        throw error;
+      }
+
+      return state === 'hidden' ? !isDisplayed : isDisplayed;
+    }, timeout).catch((error: unknown) => {
+      if (error instanceof TimeoutError) {
+        const what = state === 'hidden' ? 'was still on the screen' : `did not become ${state}`;
+        throw new TimeoutError(`Element "${this.selector}" ${what} after ${timeout}ms`);
+      }
+      throw error;
+    });
     return result;
   }
 
@@ -163,34 +260,14 @@ export class Locator {
 
   @boxedStep
   async tap(options?: ActionOptions) {
-    const isElementDisplayed = await this.isVisible(options);
-    if (isElementDisplayed) {
-      const element = await this.getElement();
-      if (element) {
-        await this.webDriverClient.elementClick(element!['element-6066-11e4-a52e-4f735466cecf']);
-      } else {
-        throw new Error(`Failed to tap: Element "${this.selector}" not found`);
-      }
-    } else {
-      throw new Error(`Failed to tap: Element "${this.selector}" not visible`);
-    }
+    const elementId = await this.requireVisibleElementId('tap', options);
+    await this.webDriverClient.elementClick(elementId);
   }
 
   @boxedStep
   async getText(options?: ActionOptions): Promise<string> {
-    const isElementDisplayed = await this.isVisible(options);
-    if (isElementDisplayed) {
-      const element = await this.getElement();
-      if (element) {
-        return await this.webDriverClient.getElementText(
-          element!['element-6066-11e4-a52e-4f735466cecf'],
-        );
-      } else {
-        throw new Error(`Failed to getText: Element "${this.selector}" is not found`);
-      }
-    } else {
-      throw new Error(`Failed to getText: Element "${this.selector}" not visible`);
-    }
+    const elementId = await this.requireVisibleElementId('getText', options);
+    return await this.webDriverClient.getElementText(elementId);
   }
 
   @boxedStep
@@ -202,7 +279,7 @@ export class Locator {
     if (this.webDriverClient.isAndroid) {
       await this.webDriverClient.executeScript('mobile: scrollGesture', [
         {
-          elementId: element['element-6066-11e4-a52e-4f735466cecf'],
+          elementId: element[ELEMENT_REFERENCE_ID],
           direction: direction,
           percent: 1,
         },
@@ -210,7 +287,7 @@ export class Locator {
     } else {
       await this.webDriverClient.executeScript('mobile: scroll', [
         {
-          elementId: element['element-6066-11e4-a52e-4f735466cecf'],
+          elementId: element[ELEMENT_REFERENCE_ID],
           direction: direction,
         },
       ]);
@@ -248,9 +325,7 @@ export class Locator {
     // of finding the element is higher at higher depth
     const reversedElements = elements.reverse();
     for (const element of reversedElements) {
-      let elementText = await this.webDriverClient.getElementText(
-        element['element-6066-11e4-a52e-4f735466cecf'],
-      );
+      let elementText = await this.webDriverClient.getElementText(element[ELEMENT_REFERENCE_ID]);
       if (this.textToMatch) {
         if (this.textToMatch instanceof RegExp && this.textToMatch.test(elementText)) {
           return element;
@@ -265,5 +340,81 @@ export class Locator {
       }
     }
     return null;
+  }
+
+  /**
+   * Waits for the element to be visible and returns its reference id, or throws with the
+   * action's name so the failure reads as "Failed to fill: …" rather than a bare timeout.
+   */
+  private async requireVisibleElementId(action: string, options?: ActionOptions): Promise<string> {
+    const isElementDisplayed = await this.isVisible(options);
+    if (!isElementDisplayed) {
+      throw new Error(`Failed to ${action}: Element "${this.selector}" not visible`);
+    }
+    const element = await this.getElement();
+    const elementId = element?.[ELEMENT_REFERENCE_ID];
+    if (!elementId) {
+      throw new Error(`Failed to ${action}: Element "${this.selector}" is not found`);
+    }
+    return elementId;
+  }
+
+  private async clearElement(elementId: string): Promise<void> {
+    if (this.isWeb) {
+      await this.webDriverClient.executeScript(WEB_CLEAR_SCRIPT, [
+        { [ELEMENT_REFERENCE_ID]: elementId },
+      ]);
+      return;
+    }
+    await this.webDriverClient.elementClear(elementId);
+  }
+
+  private async readValue(elementId: string): Promise<string> {
+    if (this.isWeb) {
+      const value = await this.webDriverClient.executeScript(WEB_VALUE_SCRIPT, [
+        { [ELEMENT_REFERENCE_ID]: elementId },
+      ]);
+      return value == null ? '' : String(value);
+    }
+    if (this.webDriverClient.isAndroid) {
+      // uiautomator2 exposes an EditText's contents as `text` — and reports the hint there while
+      // the field is empty, so an empty field has to be recognised through `hint`.
+      const text = await this.webDriverClient.getElementAttribute(elementId, 'text');
+      if (text == null || text === '') {
+        return '';
+      }
+      const hint = await this.webDriverClient.getElementAttribute(elementId, 'hint');
+      return hint != null && hint === text ? '' : String(text);
+    }
+    // XCUITest exposes a field's contents as `value` — and reports the placeholder there while
+    // the field is empty, so an empty field has to be recognised through `placeholderValue`.
+    const value = await this.webDriverClient.getElementAttribute(elementId, 'value');
+    if (value == null || value === '') {
+      return '';
+    }
+    const placeholder = await this.webDriverClient.getElementAttribute(
+      elementId,
+      'placeholderValue',
+    );
+    return placeholder != null && placeholder === value ? '' : String(value);
+  }
+
+  /**
+   * Whether a readback proves the field holds `value`. Secure fields report their contents as
+   * bullets on both drivers, so a same-length run of mask characters counts as a match too;
+   * with `secret`, only the lengths are compared.
+   */
+  private static valueMatches(entered: string, value: string, secret: boolean): boolean {
+    if (entered === value) {
+      return true;
+    }
+    if (entered.length !== value.length) {
+      return false;
+    }
+    return secret || /^[•●*·]+$/.test(entered);
+  }
+
+  private toActionOptions(options?: Partial<ActionOptions>): ActionOptions | undefined {
+    return options?.timeout != null ? { timeout: options.timeout } : undefined;
   }
 }
