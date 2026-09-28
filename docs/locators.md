@@ -78,7 +78,14 @@ await device.getByText('Submit').tap();
 
 To enter text into an element, you can use the `fill` method. It **replaces** the field's contents: it taps the field, clears it, types the value and reads it back, retrying once if the field did not take the whole value (iOS drops leading characters when a field takes focus mid-send).
 
-Because `fill` taps the field first, the software keyboard is usually up afterwards. On Android that matters: some screens ignore the first tap outside a focused field (it only dismisses the keyboard), and the keyboard can cover controls near the bottom of the screen. Submit with `press('Enter')`, or dismiss the keyboard before tapping the next control.
+On iOS `fill` taps the field first, because XCUITest refuses keys to a field that never raised the keyboard, so the keyboard is up afterwards. On Android and in a WebView it sets the value without tapping. Whenever the keyboard is up, remember that it can cover controls near the bottom of the screen, and that some screens swallow the first tap outside a focused field to dismiss it. Call `device.hideKeyboard()` before tapping the next control, or submit with `press('Enter')`.
+
+`fill` throws if the field does not hold exactly the value afterwards. For a field that legitimately changes what was typed (an input mask, auto-formatting, `maxLength`, iOS autocorrect), pass `verify: false` and assert what you expect with `inputValue()`:
+
+```ts
+await device.getById('phone').fill('5551234567', { verify: false });
+expect(await device.getById('phone').inputValue()).toBe('(555) 123-4567');
+```
 
 ```ts
 await device.getByText('Search').fill('Wikipedia');

@@ -235,3 +235,38 @@ describe('pullFile / waitForFile', () => {
     ).rejects.toThrow("Could not pull 'x.pdf' within 30ms: nope");
   });
 });
+
+describe('isKeyboardShown / hideKeyboard', () => {
+  test('hideKeyboard is a no-op when the keyboard is down', async () => {
+    const client = mockClient(true, {
+      isKeyboardShown: vi.fn().mockResolvedValue(false),
+      hideKeyboard: vi.fn(),
+    });
+    await device(client).hideKeyboard();
+    expect(client.hideKeyboard).not.toHaveBeenCalled();
+  });
+
+  test('Android: hides through the driver and checks it went away', async () => {
+    const client = mockClient(true, {
+      isKeyboardShown: vi.fn().mockResolvedValueOnce(true).mockResolvedValue(false),
+      hideKeyboard: vi.fn().mockResolvedValue(undefined),
+    });
+    await device(client).hideKeyboard();
+    expect(client.hideKeyboard).toHaveBeenCalledTimes(1);
+  });
+
+  test('iOS: taps the named dismiss key, and throws if the keyboard stays up', async () => {
+    const client = mockClient(false, { isKeyboardShown: vi.fn().mockResolvedValue(true) });
+    await expect(device(client).hideKeyboard('Return')).rejects.toThrow("hideKeyboard('Return')");
+    expect(mobileCalls(client)).toEqual([['mobile: hideKeyboard', { keys: ['Return'] }]]);
+  });
+
+  test('isKeyboardShown hops to NATIVE_APP first', async () => {
+    const client = mockClient(true, {
+      getAppiumContext: vi.fn().mockResolvedValue('WEBVIEW_com.example.app'),
+      isKeyboardShown: vi.fn().mockResolvedValue(true),
+    });
+    expect(await device(client).isKeyboardShown()).toBe(true);
+    expect(client.switchAppiumContext).toHaveBeenCalledWith('NATIVE_APP');
+  });
+});

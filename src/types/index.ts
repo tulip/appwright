@@ -16,6 +16,12 @@ export type FillOptions = Partial<ActionOptions> & {
    * request log is not affected.
    */
   secret?: boolean;
+  /**
+   * Read the value back after typing and retry once on a mismatch, then throw. Defaults to
+   * `true`. Set it to `false` for fields that legitimately change what was typed — input masks,
+   * auto-formatting, `maxLength`, iOS autocorrect — and assert the result with `inputValue()`.
+   */
+  verify?: boolean;
 };
 
 export type LabelOptions = {
@@ -66,11 +72,12 @@ export type CleanDeviceOptions = {
    *
    * - `'reinstall'` uninstalls and reinstalls the app from the project's `buildPath`, so the
    *   block starts with no stored data, no permissions history and a fresh install.
-   * - `'clearData'` keeps the install and wipes the app's data container (`pm clear` on
-   *   Android, the simulator's data container on iOS). Much faster than a reinstall when the
-   *   build has not changed. iOS simulator only.
+   * - `'clearData'` keeps the install and wipes the app's data (`pm clear` on Android, the
+   *   simulator's data container on iOS), then grants Android runtime permissions back. Much
+   *   faster than a reinstall when the build has not changed. Android and the iOS simulator; a
+   *   physical iOS device exposes no data container, so use `'reinstall'` there.
    *
-   * Defaults to `'reinstall'` when `useCleanDevice()` is called with no options.
+   * Defaults to `'reinstall'`, including when the option is left out of the object.
    */
   appReset?: AppResetMode;
 };

@@ -90,7 +90,7 @@ describe("waitFor('hidden')", () => {
 });
 
 describe('fill', () => {
-  test('native: taps, clears, types, then reads the value back', async () => {
+  test('native Android: clears, types, reads back — without tapping, so no keyboard', async () => {
     const client = mockClient({
       getElementAttribute: vi
         .fn()
@@ -98,11 +98,48 @@ describe('fill', () => {
     });
     await nativeLocator(client).fill('hello');
 
-    expect(client.elementClick).toHaveBeenCalledWith('element-id');
+    expect(client.elementClick).not.toHaveBeenCalled();
     expect(client.elementClear).toHaveBeenCalledWith('element-id');
     expect(client.elementSendKeys).toHaveBeenCalledWith('element-id', 'hello');
     expect(client.getElementAttribute).toHaveBeenCalledWith('element-id', 'text');
     expect(client.elementSendKeys).toHaveBeenCalledTimes(1);
+  });
+
+  test('native iOS: taps the field first, because XCUITest needs the keyboard up', async () => {
+    const client = mockClient({
+      isAndroid: false,
+      getElementAttribute: vi
+        .fn()
+        .mockImplementation(async (_id, name) => (name === 'value' ? 'hello' : 'placeholder')),
+    });
+    await nativeLocator(client).fill('hello');
+    expect(client.elementClick).toHaveBeenCalledWith('element-id');
+    expect(calls(client.elementClick).length).toBe(1);
+  });
+
+  test('web: never taps', async () => {
+    const client = mockClient({
+      executeScript: vi
+        .fn()
+        .mockImplementation(async (script: string) =>
+          script.includes('return') ? 'hello' : undefined,
+        ),
+    });
+    await webLocator(client).fill('hello');
+    expect(client.elementClick).not.toHaveBeenCalled();
+  });
+
+  test('verify: false clears and types once, with no readback and no throw', async () => {
+    const client = mockClient({ getElementAttribute: textAttr('(555) 123-4567') });
+    await nativeLocator(client).fill('5551234567', { verify: false });
+    expect(client.elementClear).toHaveBeenCalledTimes(1);
+    expect(client.elementSendKeys).toHaveBeenCalledTimes(1);
+    expect(client.getElementAttribute).not.toHaveBeenCalled();
+  });
+
+  test('a mismatch error points at verify: false', async () => {
+    const client = mockClient({ getElementAttribute: textAttr('(555) 123-4567') });
+    await expect(nativeLocator(client).fill('5551234567')).rejects.toThrow('{ verify: false }');
   });
 
   test('native iOS: reads `value` back and treats a placeholder as empty', async () => {
@@ -154,16 +191,16 @@ describe('fill', () => {
 
   test('secret: compares lengths and never prints the value', async () => {
     const client = mockClient({ getElementAttribute: textAttr('••••') });
-    await nativeLocator(client).fill('pass', { secret: true });
+    await nativeLocator(client).fill('x9Qz', { secret: true });
     expect(client.elementSendKeys).toHaveBeenCalledTimes(1);
 
     const short = mockClient({ getElementAttribute: textAttr('•••') });
     const error = await nativeLocator(short)
-      .fill('pass', { secret: true })
+      .fill('x9Qz', { secret: true })
       .catch((e: Error) => e);
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toContain('3 character(s) after filling 4 character(s)');
-    expect((error as Error).message).not.toContain('pass');
+    expect((error as Error).message).not.toContain('x9Qz');
   });
 
   test('a masked readback of the right length counts as a match without secret', async () => {

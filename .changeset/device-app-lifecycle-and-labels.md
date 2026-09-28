@@ -10,7 +10,7 @@ only applies at session creation and means "erase the simulator" on iOS); on And
 keeps the runtime permissions `autoGrantPermissions` gave the app. `device.resetAppData()` is the
 faster wipe-in-place variant. `useCleanDevice({ appReset: 'reinstall' | 'clearData' })`, exported
 from the package, registers the single `beforeAll` that resets the app for a `describe` block.
-Building blocks: `clearAppData`, `grantAllPermissions`, `isAppInstalled`, `getAppBundleId`,
+Keyboard: `device.isKeyboardShown()` / `device.hideKeyboard()`. Building blocks: `clearAppData`, `grantAllPermissions`, `isAppInstalled`, `getAppBundleId`,
 `getProvider`, `executeMobileCommand`.
 
 **Locators.** `device.getByLabel()` / `webView.getByLabel()` find an element by accessibility
@@ -28,8 +28,9 @@ that came to the foreground; `device.waitForAppToClose()` waits for it to go awa
 - `fill()` now **replaces** a field's contents (tap, clear, type, read back) instead of appending
   to them. Anything that used `fill` to append — in particular `fill('\n')` to press Return — must
   become `press('Enter')`, which on Android sends a real Enter key event (typing `"\n"` there
-  replaced the field's text with a space). `fill` taps the field first, so the software keyboard
-  is usually up afterwards. A manual clear before `fill` is no longer needed. Pass
+  replaced the field's text with a space). On iOS `fill` taps the field first, so the keyboard is
+  up afterwards; `device.hideKeyboard()` dismisses it. `fill` throws when the field does not end
+  up holding the value; pass `{ verify: false }` for input masks, `maxLength` or autocorrect. A manual clear before `fill` is no longer needed. Pass
   `{ secret: true }` for passwords so the value stays out of appwright's step titles and error
   messages (the `webdriver` request log is unaffected).
 - `getById()` defaults to an **exact** match. Pass `{ exact: false }` to keep substring matching

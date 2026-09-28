@@ -66,20 +66,31 @@ export class Locator {
   ) {}
 
   /**
-   * Replaces the element's contents with `value`.
+   * Replaces the element's contents with `value`: clear, type, then read the value back. iOS
+   * drops leading characters when a field takes focus mid-send, so a mismatch is retried once
+   * before it is reported. Pass `verify: false` for fields that legitimately change what was
+   * typed (input masks, auto-formatting, `maxLength`, autocorrect).
    *
-   * The sequence is the one that holds on both drivers: tap (XCUITest refuses keys to a field
-   * that never raised the keyboard), clear, type, then read the value back. iOS drops leading
-   * characters when a field takes focus mid-send, so a mismatch is retried once before it is
-   * reported.
+   * Only a native iOS field is tapped first: XCUITest refuses keys to a field that never raised
+   * the keyboard. UiAutomator2 and the WebView drivers set the value without focus, so on Android
+   * `fill` does not raise the software keyboard.
    */
   @boxedStep
   async fill(value: string, options?: FillOptions): Promise<void> {
     const secret = options?.secret === true;
+    const verify = options?.verify !== false;
     const actionOptions = this.toActionOptions(options);
     const elementId = await this.requireVisibleElementId('fill', actionOptions);
 
-    await this.webDriverClient.elementClick(elementId);
+    if (!this.isWeb && !this.webDriverClient.isAndroid) {
+      await this.webDriverClient.elementClick(elementId);
+    }
+
+    if (!verify) {
+      await this.clearElement(elementId);
+      await this.webDriverClient.elementSendKeys(elementId, value);
+      return;
+    }
 
     let entered = '';
     for (let attempt = 1; attempt <= 2; attempt += 1) {
@@ -95,7 +106,9 @@ export class Locator {
     const got = secret ? `${entered.length} character(s)` : JSON.stringify(entered);
     const expected = secret ? `${value.length} character(s)` : JSON.stringify(value);
     throw new Error(
-      `Failed to fill: Element "${this.selector}" holds ${got} after filling ${expected}.`,
+      `Failed to fill: Element "${this.selector}" holds ${got} after filling ${expected}. ` +
+        'If the field reformats what is typed (input mask, maxLength, autocorrect), pass ' +
+        '`{ verify: false }` and assert with inputValue() instead.',
     );
   }
 

@@ -33,7 +33,7 @@ test.describe.serial('printing', () => {
 | `appReset`    | What happens before the block                                                    |
 | ------------- | -------------------------------------------------------------------------------- |
 | `'reinstall'` | Uninstall and reinstall from the project's `buildPath`. Default when no options. |
-| `'clearData'` | Keep the install, wipe the app's data. Much faster. iOS simulator only.          |
+| `'clearData'` | Keep the install, wipe the app's data. Much faster. Android and iOS simulator.   |
 
 **Cost.** Playwright instantiates test-scoped fixtures inside a `beforeAll` and tears them down
 when the hook ends, so one hook is one Appium session, and a new session is seconds, not
@@ -75,7 +75,8 @@ providers, where a local build file cannot be installed.
 ### `device.resetAppData()`
 
 Terminate, wipe the app's data, grant its permissions back (Android — `pm clear` revokes them),
-relaunch. iOS simulator only: a real device exposes no data container, so use `reinstallApp()`.
+relaunch. Android and the iOS simulator; a physical iOS device exposes no data container, so use
+`reinstallApp()` there.
 
 ### Building blocks
 
@@ -135,6 +136,15 @@ await device.activateApp();
   the browser from here on.
 - `device.waitForAppToClose(appId, { timeout, pollInterval })` — blocks until `appId` leaves the
   foreground, e.g. a browser closing itself once an auth flow redirects back to the app.
+
+## The software keyboard
+
+- `device.isKeyboardShown()`: whether the software keyboard is on screen. On Android the IME is
+  a separate window, so no locator or tree dump can see it.
+- `device.hideKeyboard(iosKeyName?)`: dismisses the keyboard if it is up, and throws if it is
+  still up afterwards. On iOS the driver taps a dismiss key, `Done` by default; pass the label of
+  the keyboard's key for others, such as `hideKeyboard('Return')`. Use it before tapping a
+  control below a focused field.
 
 ## Escape hatch
 

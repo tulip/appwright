@@ -437,6 +437,45 @@ export class Device {
   }
 
   /**
+   * Whether the software keyboard is on screen. The accessibility tree does not show the IME on
+   * Android, so a locator cannot answer this.
+   */
+  async isKeyboardShown(): Promise<boolean> {
+    await this.ensureNativeContext();
+    return await this.webDriverClient.isKeyboardShown();
+  }
+
+  /**
+   * Dismisses the software keyboard if it is up; a no-op otherwise. Use it before tapping a
+   * control below a focused field: the keyboard can cover it, and some screens swallow the first
+   * tap outside a focused field to dismiss the keyboard instead of delivering it.
+   *
+   * On iOS the driver taps a dismiss key (`Done` by default); pass the key's label for keyboards
+   * that use another one, e.g. `hideKeyboard('Return')`.
+   */
+  @boxedStep
+  async hideKeyboard(iosKeyName?: string): Promise<void> {
+    if (!(await this.isKeyboardShown())) {
+      return;
+    }
+    if (this.getPlatform() == Platform.IOS) {
+      await this.executeMobileCommand('mobile: hideKeyboard', {
+        keys: iosKeyName == null ? [] : [iosKeyName],
+      });
+    } else {
+      await this.webDriverClient.hideKeyboard();
+    }
+    if (await this.isKeyboardShown()) {
+      throw new Error(
+        'hideKeyboard: the software keyboard is still on screen' +
+          (this.getPlatform() == Platform.IOS
+            ? ". Pass the label of the keyboard's dismiss key, e.g. hideKeyboard('Return')."
+            : '.'),
+      );
+    }
+  }
+
+  /**
    * Whether `appId` is installed on the device.
    */
   async isAppInstalled(appId: string): Promise<boolean> {
@@ -533,7 +572,8 @@ export class Device {
   /**
    * Resets the app under test to a first-launch state without reinstalling it: terminate, wipe
    * its data, grant its permissions back (Android), relaunch. Much faster than `reinstallApp()`
-   * when the build has not changed. iOS simulator only.
+   * when the build has not changed. Works on Android and the iOS simulator; a physical iOS device
+   * exposes no data container, so it throws there — use `reinstallApp()`.
    */
   @boxedStep
   async resetAppData(): Promise<void> {

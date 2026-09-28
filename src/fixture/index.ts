@@ -137,9 +137,7 @@ export const test = base.extend<TestLevelFixtures, WorkerLevelFixtures>({
  * Unlike the session-level `uninstallAppBeforeTest` / `preserveAppState` capabilities, this
  * resets per block rather than per session, and means the same thing on both platforms.
  */
-export function useCleanDevice(options: CleanDeviceOptions = { appReset: 'reinstall' }): void {
-  const { appReset } = options;
-
+export function useCleanDevice({ appReset = 'reinstall' }: CleanDeviceOptions = {}): void {
   test.beforeAll(async ({ device }) => {
     if (appReset === 'reinstall') {
       await device.reinstallApp();
