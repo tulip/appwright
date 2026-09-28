@@ -81,6 +81,24 @@ test('WebView login test', async ({ device, webView }) => {
 
 **Note:** Currently supports apps with a single WebView only. The framework automatically connects to the first available WebView context within your app.
 
+### Resetting the app per block
+
+Declare at the top of a `describe` block that its tests need a fresh app. One `beforeAll` (one Appium session) reinstalls the app from the project's `buildPath`, or wipes its data with `appReset: 'clearData'`:
+
+```ts
+import { test, useCleanDevice } from '@tulip/appwright';
+
+test.describe.serial('onboarding', () => {
+  useCleanDevice({ appReset: 'reinstall' });
+
+  test('shows the welcome screen', async ({ device }) => {
+    await expect(device.getByText('Welcome')).toBeVisible();
+  });
+});
+```
+
+See [Device](device.md#resetting-the-app) for the app lifecycle, file access and URL helpers behind it.
+
 ## Run the Test
 
 To run the test, you can use the `npx appwright test` command.

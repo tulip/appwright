@@ -1,4 +1,4 @@
-export { expect, test } from './fixture';
+export { expect, test, useCleanDevice } from './fixture';
 export { defineConfig } from './config';
 export { Device } from './device';
 export { resolveRunName } from './run-name';

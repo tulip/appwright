@@ -3,11 +3,13 @@ import retry from 'async-retry';
 import { Device } from '../device';
 import {
   AppwrightLocator,
+  LabelOptions,
   Platform,
 } from '../types';
 import { NonRetryableError } from '../types/errors';
 import {
   boxedStep,
+  escapeQuotes,
   isNoSuchWindowError,
 } from '../utils';
 
@@ -108,9 +110,27 @@ export class WebView {
       selector,
       findStrategy,
       textToMatch,
+      web: true,
     });
     // Wrap all locator methods to ensure webview context
     return this.wrapWithContextSwitch(originalLocator);
+  }
+
+  /**
+   * Locate an element by its `aria-label`. Defaults to an exact match.
+   *
+   * **Usage:**
+   * ```js
+   * await webView.getByLabel('Stations').tap();
+   * await webView.getByLabel('Station', { exact: false }).tap();
+   * ```
+   *
+   * @param label - The accessible label
+   * @param options - `exact` (default `true`); `editable` is ignored in a WebView
+   * @returns AppwrightLocator
+   */
+  getByLabel(label: string, { exact = true }: LabelOptions = {}): AppwrightLocator {
+    return this.css(`[aria-label${exact ? '' : '*'}="${escapeQuotes(label)}"]`);
   }
 
   /**

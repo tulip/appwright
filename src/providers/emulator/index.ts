@@ -121,7 +121,13 @@ Follow the steps mentioned in ${androidSimulatorConfigDocLink} to run test on An
     const testOptions: TimeoutOptions = {
       expectTimeout,
     };
-    return new Device(webDriverClient, bundleId, testOptions, this.project.use.device?.provider!);
+    return new Device(
+      webDriverClient,
+      bundleId,
+      testOptions,
+      this.project.use.device?.provider!,
+      this.project.use.buildPath,
+    );
   }
 
   private async createConfig() {

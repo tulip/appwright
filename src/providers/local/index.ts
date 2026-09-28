@@ -78,7 +78,13 @@ export class LocalDeviceProvider implements DeviceProvider {
     const testOptions: TimeoutOptions = {
       expectTimeout,
     };
-    return new Device(webDriverClient, bundleId, testOptions, this.project.use.device?.provider!);
+    return new Device(
+      webDriverClient,
+      bundleId,
+      testOptions,
+      this.project.use.device?.provider!,
+      this.project.use.buildPath,
+    );
   }
 
   private async createConfig() {
