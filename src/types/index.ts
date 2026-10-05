@@ -164,6 +164,24 @@ export type DeviceEntry = {
 };
 
 /**
+ * Extra Appium capabilities for providers that start the session locally.
+ */
+export type CapabilitiesConfig = {
+  /**
+   * Merged over the capabilities appwright builds, so a value here wins. Keys without a vendor
+   * prefix get `appium:` unless they are W3C capabilities (`platformName`, `timeouts`, …).
+   *
+   * ```typescript
+   * device: {
+   *   provider: 'local-device',
+   *   capabilities: { showXcodeLog: true, allowProvisioningDeviceRegistration: true },
+   * }
+   * ```
+   */
+  capabilities?: Record<string, unknown>;
+};
+
+/**
  * Configuration options for app reset behavior between test sessions.
  */
 export type AppResetConfig = {
@@ -291,7 +309,20 @@ export type LocalDeviceConfig = {
    * ```
    */
   updatedWDABundleId?: string;
-} & AppResetConfig;
+
+  /**
+   * **iOS only**: Apple Developer Team ID used to sign WebDriverAgent for a physical device
+   * (`appium:xcodeOrgId`).
+   */
+  xcodeOrgId?: string;
+
+  /**
+   * **iOS only**: code-signing identity for WebDriverAgent (`appium:xcodeSigningId`). The
+   * driver defaults to `"Apple Development"`.
+   */
+  xcodeSigningId?: string;
+} & AppResetConfig &
+  CapabilitiesConfig;
 
 /**
  * Configuration for running tests on an Android or iOS emulator.
@@ -320,7 +351,8 @@ export type EmulatorConfig = {
    * Default orientation is "portrait".
    */
   orientation?: DeviceOrientation;
-} & AppResetConfig;
+} & AppResetConfig &
+  CapabilitiesConfig;
 
 export enum Platform {
   ANDROID = 'android',
