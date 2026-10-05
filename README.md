@@ -127,6 +127,10 @@ When using `provider: "local-device"` or `provider: "emulator"`, additional conf
 
 - `updatedWDABundleId` _(optional, iOS only)_: Custom WebDriverAgent bundle ID for iOS local devices. Use this when running a custom-built WebDriverAgent (e.g., 'co.tulip.WebDriverAgentRunner').
 
+- `xcodeOrgId` / `xcodeSigningId` _(optional, iOS local devices only)_: Apple Developer Team ID and signing identity used to sign WebDriverAgent for a physical device. These can be read from a `.env` in your config (`process.env.XCODE_ORG_ID`).
+
+- `capabilities` _(optional)_: Extra Appium capabilities merged over the ones appwright builds. Bare names get the `appium:` prefix.
+
 See [Configuration](docs/config.md) for detailed documentation and examples.
 
 ### Run tests
