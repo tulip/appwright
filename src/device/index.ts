@@ -652,6 +652,10 @@ export class Device {
    */
   @boxedStep
   async setAlertAutoAccept(enabled: boolean): Promise<void> {
+    if (this.getPlatform() != Platform.IOS) {
+      logger.log('setAlertAutoAccept: nothing to do on Android, which answers no alert by itself.');
+      return;
+    }
     await this.applyAlertAction(enabled ? ALERT_ACCEPT : ALERT_NONE);
   }
 
