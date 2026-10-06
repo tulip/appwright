@@ -15,6 +15,32 @@ names, container paths, what a real device allows) are handled inside.
 - `device.getProvider()` — the project's provider (`emulator`, `local-device`, `browserstack`,
   `lambdatest`). A simulator and a USB phone both report `Platform.IOS`; only this separates them.
 
+## Which device this is
+
+- `device.getUdid()` — the device the session landed on, as the driver reports it: the adb serial
+  (`emulator-5554`) on Android, the device or simulator UDID on iOS. With several devices
+  configured, each worker gets its own (see [running on multiple local devices](config.md#running-on-multiple-local-devices)),
+  so read it here rather than from an environment variable or `xcrun simctl list`, which cannot
+  tell the workers' devices apart.
+- `device.isSimulator()` — whether this is an iOS simulator: the one kind of device whose app
+  containers are host directories and that `xcrun simctl` can drive. An Android emulator is not
+  a simulator here; `getProvider() === 'emulator'` means "not a physical device" on either
+  platform.
+
+On a simulator, the host side is reachable directly:
+
+- `device.simulatorContainerPath(relativePath?)` — the host directory behind a path in the app's
+  data container, for reading what the app wrote with ordinary `fs` calls. The container is
+  named by an install-time UUID, so it is asked of `simctl` each time; a reinstall moves it.
+- `device.terminateApp(appId, { force: true })` — kills the process with `xcrun simctl
+  terminate` instead of asking WebDriverAgent, which reaches bundle ids XCUITest does not treat
+  as apps (`com.apple.SafariViewService`, which hosts an `ASWebAuthenticationSession`). Not an
+  error when nothing by that id is running. On Android `force` changes nothing — the driver's
+  terminate is already a force-stop — and a physical iOS device throws.
+
+Both throw on anything but a simulator. `appContainerPath()` with `pullFile()` (below) is the
+route that works on every device.
+
 ## Resetting the app
 
 ### `useCleanDevice(options)`
@@ -85,7 +111,8 @@ relaunch. Android and the iOS simulator; a physical iOS device exposes no data c
 - `device.grantAllPermissions(appId?)` — Android: grant every runtime permission the app declares.
   No-op on iOS.
 - `device.isAppInstalled(appId)`.
-- `device.terminateApp(appId?)`, `device.activateApp(appId?)`, `device.backgroundApp(seconds)`.
+- `device.terminateApp(appId?, { force? })`, `device.activateApp(appId?)`,
+  `device.backgroundApp(seconds)`.
 
 ## Files on the device
 
@@ -145,6 +172,14 @@ await device.activateApp();
   still up afterwards. On iOS the driver taps a dismiss key, `Done` by default; pass the label of
   the keyboard's key for others, such as `hideKeyboard('Return')`. Use it before tapping a
   control below a focused field.
+
+## Inspecting the native tree
+
+`device.getPageSource()` returns the native view hierarchy as XML (UiAutomator2's dump on
+Android, XCUITest's on iOS) — the attributes a locator can match on. It is read from
+`NATIVE_APP` whatever context is active and then switches back, so calling it between two
+`webView` steps leaves the WebView bound. For a page's HTML, use
+`webView.evaluate(() => document.documentElement.outerHTML)`.
 
 ## Escape hatch
 

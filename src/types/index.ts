@@ -39,6 +39,28 @@ export type LabelOptions = {
   editable?: boolean;
 };
 
+export type IdOptions = {
+  /** Defaults to `true`. Set it to `false` to match a substring of the id. */
+  exact?: boolean;
+  /**
+   * Restrict the match to editable text fields, as `LabelOptions.editable` does. An id is not
+   * always unique to the field: a system dialog on Android can give the field and its label the
+   * same resource id, and on iOS a test id can sit on a field's wrapper as well as the input.
+   */
+  editable?: boolean;
+};
+
+export type TerminateAppOptions = {
+  /**
+   * **iOS simulator only.** Kill the process with `xcrun simctl terminate` instead of asking
+   * WebDriverAgent. That reaches bundle ids XCUITest does not treat as apps, such as the
+   * `com.apple.SafariViewService` process behind an `ASWebAuthenticationSession`. An app that
+   * is not running is not an error. Android's terminate is already a force-stop, so `force`
+   * changes nothing there; a physical iOS device throws.
+   */
+  force?: boolean;
+};
+
 export type OpenUrlOptions = {
   /**
    * Open the URL in this app (Android package name or iOS bundle id) instead of the platform's
