@@ -14,6 +14,20 @@ names, container paths, what a real device allows) are handled inside.
   command is native and fails when routed through a WebView.
 - `device.getProvider()` — the project's provider (`emulator`, `local-device`, `browserstack`,
   `lambdatest`). A simulator and a USB phone both report `Platform.IOS`; only this separates them.
+- `device.getAppState(appId?)` — an `AppState`: `NotInstalled`, `NotRunning`, `Suspended`,
+  `Background` or `Foreground`. Both drivers' terminate already waits for the app to stop, so
+  this is how a test proves that a relaunch really relaunched:
+
+  ```ts
+  await device.terminateApp();
+  expect(await device.getAppState()).toBe(AppState.NotRunning);
+  await device.activateApp();
+  ```
+
+- `device.getBuildInfo(buildPath?)` — what the project's build file declares: `bundleId`,
+  `version` (`CFBundleShortVersionString` / `versionName`), `buildNumber` (`CFBundleVersion` /
+  `versionCode`) and `path`, read on the host from the `.app`, `.ipa` or `.apk` (an `.apk` needs
+  `ANDROID_HOME`, for `aapt`). Compare it with the version the app shows.
 
 ## Which device this is
 
@@ -170,6 +184,90 @@ To drive the page a browser shows rather than its native chrome, bind it with
 `webView.attach({ pageUrl })` (see [Attaching to a page](locators.md#attaching-to-a-page)). With
 Chrome in front, discovery picks Chrome's `WEBVIEW_chrome` context, so after the browser closes,
 attach again to get back to the app's own WebView.
+
+## Pages in WebViews
+
+- `device.webPages()` — every WebView page the session can see, as `{ context, key, url, title }`,
+  read natively through `mobile: getContexts` without attaching to any: the app's pages, a
+  popup's, and on Android every tab of a browser in front. iOS gives each page its own context;
+  Android has one context per WebView or browser, so `key` adds the page's DevTools id.
+- `device.waitForWebPage({ notIn, url, timeout })` — waits for a page that is not among `notIn`
+  to load, and returns it: a `window.open()` popup, an OAuth window, a new tab. A new page reads
+  `about:blank` for about a second first, and does not count until its URL arrives. A page whose
+  key or URL is among `notIn` is not new: iOS lists a page under a new context when it reloads.
+
+```ts
+const before = await device.webPages();
+await webView.getByRole('link', { name: 'Open PDF' }).tap();
+const popup = await device.waitForWebPage({ notIn: before, url: '.pdf' });
+await webView.attach({ context: popup.context, pageUrl: popup.url });
+```
+
+Bind the page with `attach()`: plain discovery binds the first WebView it finds, which on iOS is
+the page the popup opened from. Every `device` call that is native leaves the session in
+`NATIVE_APP`, after which the next `webView` call discovers again — attach again after native
+steps when the page is not the one discovery finds.
+
+## Alerts
+
+On iOS every appwright provider starts the session with `appium:autoAcceptAlerts`, under which
+WebDriverAgent taps the last button of **any** alert within about two seconds: system permission
+prompts, but also the app's own `Alert.alert` confirmations, before the test can look at them.
+Turn it off around a step that has to see or answer an alert:
+
+```ts
+await device.withAlertAutoAccept(false, async () => {
+  await device.getById('clear-instance-button').tap();
+  await expect.poll(() => device.getAlertText()).toContain('Are you sure?');
+  await device.acceptAlert({ buttonLabel: 'Clear Data' });
+});
+```
+
+- `device.withAlertAutoAccept(enabled, fn)` — runs `fn` with auto-accept on or off, then
+  restores what the session had (from its capabilities, or an earlier `setAlertAutoAccept()`).
+  When `fn` throws, its error is the one reported; a restore that fails after it is only logged.
+- `device.setAlertAutoAccept(enabled)` — the same switch without the restore, for a whole block.
+- `device.acceptAlert({ buttonLabel? })`, `device.dismissAlert({ buttonLabel? })` — answer the
+  alert on screen with its default accept / dismiss button, or the one labelled `buttonLabel`.
+- `device.getAlertText()` — the alert's title and message.
+
+Android answers no alert by itself (`appium:autoGrantPermissions` covers permission prompts), so
+the auto-accept switch is a no-op there; the answering methods work on both platforms.
+
+## Rotating the device
+
+```ts
+const window = await device.setOrientation(DeviceOrientation.LANDSCAPE);
+```
+
+- `device.setOrientation(orientation, { timeout? })` — rotates, then returns the window rectangle
+  once the rotation has taken effect: the driver reports the new orientation and the window has
+  its shape. The project's `device.orientation` applies only when a session starts; this rotates
+  mid-test.
+- `device.getOrientation()`, `device.getWindowRect()` — what the driver reports. On iOS both
+  describe the app in front, so while the home screen is up they read portrait whatever way the
+  device is held.
+
+A rotation outlives the session, so after a test that rotated, the `device` fixture rotates the
+device back to the project's `device.orientation` (portrait by default), bringing the app under
+test to the front first. On iOS the app has to be in front to rotate at all — the home screen is
+portrait-only — and a modal that is still animating in refuses too: WebDriverAgent answers
+"Unable To Rotate Device", and `setOrientation` reports that rather than retrying it.
+
+## Gestures
+
+Positions are in the driver's units: points on iOS, physical pixels on Android — the units of
+`getWindowRect()` and of a native locator's `boundingBox()`.
+
+- `device.drag({ from, to, duration? })` — one finger, with W3C pointer actions: press, hold
+  100 ms so the touch reads as a drag rather than a fling, move over `duration` (400 ms by
+  default), lift.
+- `device.swipeFromEdge('left' | 'right', { inset?, distance?, y?, duration? })` — a swipe in
+  from the edge, as for a drawer or the back swipe. `inset` is how far in from the edge the
+  finger goes down, in points on iOS and dp on Android (2 by default), so it means the same on
+  every screen density; `distance` and `y` are fractions of the window. Safari's history swipe
+  ignores synthesized touches, this one and XCUITest's own; navigate in the page instead.
+- `device.pressBack()` — Android's back key. Throws on iOS, which has none.
 
 ## The software keyboard
 
