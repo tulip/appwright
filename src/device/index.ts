@@ -42,7 +42,12 @@ const ANDROID_DOWNLOADS_DIR = '/sdcard/Download';
  */
 const UDID_CAPABILITIES = ['deviceUDID', 'appium:deviceUDID', 'udid', 'appium:udid'];
 
-/** `simctl terminate`'s complaint about an app that is not running. */
+/**
+ * How `simctl terminate` says the app was not running: it exits with the POSIX error it got,
+ * ESRCH (3), and prints this. Other failures exit with other codes (148 for an unknown device), so
+ * the code is the signal; the text covers a simctl that changes its exit codes.
+ */
+const SIMCTL_NO_SUCH_PROCESS = 3;
 const SIMCTL_NOT_RUNNING = 'found nothing to terminate';
 
 const execFilePromise = promisify(execFile);
@@ -834,8 +839,9 @@ export class Device {
     try {
       await execFilePromise('xcrun', ['simctl', 'terminate', udid, appId]);
     } catch (error) {
-      const stderr = String((error as { stderr?: unknown }).stderr ?? '');
-      if (!stderr.includes(SIMCTL_NOT_RUNNING)) {
+      const { code, stderr: rawStderr } = error as { code?: unknown; stderr?: unknown };
+      const stderr = String(rawStderr ?? '');
+      if (code !== SIMCTL_NO_SUCH_PROCESS && !stderr.includes(SIMCTL_NOT_RUNNING)) {
         throw new Error(
           `xcrun simctl terminate ${udid} ${appId} failed: ${stderr.trim() || error}`,
         );

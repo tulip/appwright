@@ -185,8 +185,9 @@ export type TerminateAppOptions = {
 export type AttachOptions = {
   /**
    * Bind this context by name instead of discovering one, e.g. `'WEBVIEW_chrome'` for a Chrome
-   * Custom Tab. Without it, the WebView of the app in the foreground is bound — a Chrome
-   * browser's `WEBVIEW_chrome` included, when Chrome is the app in front.
+   * Custom Tab. Without it, a context is discovered as other `webView` calls do: on Android, the
+   * WebView of the app in front (Chrome's `WEBVIEW_chrome` when that is Chrome); on iOS, the
+   * first WebView XCUITest lists for the app under test.
    */
   context?: string;
   /**

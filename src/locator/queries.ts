@@ -122,6 +122,10 @@ function formatMatch(value: string | RegExp): string {
   return value instanceof RegExp ? String(value) : JSON.stringify(value);
 }
 
+/**
+ * The whole function travels with every lookup, about 13 KB: WebDriver cannot keep a script in
+ * the page between calls, and a navigation would drop it anyway.
+ */
 function scriptQuery(query: DomQuery, description: string): LocatorQuery {
   return {
     selector: `return (${queryDom.toString()})(arguments[0], ${JSON.stringify(query)});`,

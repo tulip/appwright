@@ -25,7 +25,9 @@ import { boxedStep, contextName, delay, escapeQuotes, isNoSuchWindowError } from
 /**
  * Appium names a browser's context after its DevTools socket, not its package, and every Chrome
  * channel serves `chrome_devtools_remote`: with a Custom Tab in front, the foreground package is
- * `com.android.chrome` and its context `WEBVIEW_chrome`.
+ * `com.android.chrome` and its context `WEBVIEW_chrome`. Only the packages Appium itself treats
+ * as Chrome are listed. If Appium ever renames these contexts, discovery with Chrome in front
+ * finds nothing again, and `attach()`'s timeout error lists the contexts it does report.
  */
 const ANDROID_BROWSER_CONTEXTS: Record<string, string> = {
   'com.android.chrome': 'WEBVIEW_chrome',
@@ -34,7 +36,11 @@ const ANDROID_BROWSER_CONTEXTS: Record<string, string> = {
   'com.chrome.canary': 'WEBVIEW_chrome',
 };
 
-/** The session itself is gone: no amount of re-attaching can help. */
+/**
+ * The session itself is gone: no amount of re-attaching can help. Matched against the error
+ * text, the only signal the drivers give; if the wording changes, `attach()` on a dead session
+ * retries until its timeout instead, and the timeout error still carries the last error.
+ */
 const FATAL_SESSION_ERRORS = [
   'invalid session id',
   'Session does not exist',
@@ -527,14 +533,20 @@ export class WebView {
       this.device.getPlatform() == Platform.ANDROID
         ? await this.device.getCurrentBundleId()
         : undefined;
-    const contexts = (await this.device.contexts())
+    const webViews = (await this.device.contexts())
       .map(contextName)
-      .filter((name) => name.includes('WEBVIEW'))
-      .filter(
-        (name) =>
-          !foreground || name.includes(foreground) || name === ANDROID_BROWSER_CONTEXTS[foreground],
-      );
+      .filter((name) => name.includes('WEBVIEW'));
+    const contexts = webViews.filter(
+      (name) =>
+        !foreground || name.includes(foreground) || name === ANDROID_BROWSER_CONTEXTS[foreground],
+    );
     console.log('[WebView] Available contexts from Appium:', contexts);
+    const skipped = webViews.filter((name) => !contexts.includes(name));
+    if (skipped.length > 0) {
+      console.log(
+        `[WebView] Skipping ${skipped.join(', ')}: not ${foreground}'s, the app in front.`,
+      );
+    }
     return contexts[0];
   }
 

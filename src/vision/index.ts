@@ -27,6 +27,7 @@ async function loadLlm() {
     const missing =
       (code === "ERR_MODULE_NOT_FOUND" || code === "MODULE_NOT_FOUND") &&
       String((error as Error).message).includes(LLM_PACKAGE);
+    // Anything else, a missing dependency of the package itself included, is rethrown as is.
     if (missing) {
       throw new Error(
         `device.beta.query() and device.beta.tap() need ${LLM_PACKAGE}, an optional peer ` +
