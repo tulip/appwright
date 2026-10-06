@@ -24,7 +24,12 @@ const IOS_EDITABLE_TYPES = [
   'XCUIElementTypeTextView',
 ];
 
-const ANDROID_EDITABLE_CLASS = '.classNameMatches(".*EditText")';
+/**
+ * The class names Android reports for a text field: an `EditText` subclass reports
+ * `android.widget.EditText`, except the autocomplete fields (a `SearchView`'s included), which
+ * report `AutoCompleteTextView` / `MultiAutoCompleteTextView`.
+ */
+const ANDROID_EDITABLE_CLASS = '.classNameMatches(".*(EditText|AutoCompleteTextView)")';
 
 const IOS_EDITABLE_FILTER = ` AND type IN {${IOS_EDITABLE_TYPES.map((type) => `"${type}"`).join(
   ', ',
