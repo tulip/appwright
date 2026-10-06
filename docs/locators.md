@@ -292,4 +292,26 @@ const color = await webView.evaluate(() => {
 });
 ```
 
+### Attaching to a page
+
+`webView` binds a WEBVIEW context the first time it is used and then only checks that _some_ WEBVIEW context is current, which stays true after the page behind it is gone: the app reloaded or rebuilt its WebView, relaunched, or handed off to a browser. Call `webView.attach()` at those points to bind a live page again. It hops to `NATIVE_APP` and back on every attempt (Appium skips its own dead-page check when asked for the context it is already in) and retries until the page's `document.readyState` is `interactive` or `complete` and `probeSelector`, if given, is in its DOM. It returns the context it bound.
+
+```ts
+// The player reloaded behind a login: wait for the new page's badge field.
+await webView.attach({ probeSelector: '[data-testid="login-badgeid"]' });
+
+// A Chrome Custom Tab is in front: drive the sign-in page in it.
+await webView.attach({ context: 'WEBVIEW_chrome', pageUrl: '/oauth2/authorize' });
+```
+
+| Option          | Default  | What it does                                                                                                                                                                                      |
+| --------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `context`       | —        | Bind this context by name. Without it, the WebView of the app in the foreground is bound; with Chrome in front, that is Chrome's `WEBVIEW_chrome`.                                                |
+| `pageUrl`       | —        | A string the page URL contains, or a RegExp it matches. A browser context spans every open tab, and chromedriver otherwise lands on whichever Chrome lists first.                                 |
+| `probeSelector` | —        | A CSS selector that must be in the DOM.                                                                                                                                                           |
+| `timeout`       | `60_000` | How long to keep trying, in milliseconds.                                                                                                                                                         |
+| `settle`        | `false`  | First wait until the set of WEBVIEW contexts has not changed for 5 s. On iOS a relaunch replaces `WEBVIEW_<pid>.1` with `.2`, and a script sent to the outgoing page holds the session for 120 s. |
+
+`device.getWindowHandles()`, `device.switchToWindow(handle)` and `device.getUrl()` are the window commands `pageUrl` is built on, for picking a tab by other means.
+
 **Note:** Currently supports apps with a single WebView only.
