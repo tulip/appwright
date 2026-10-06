@@ -32,7 +32,6 @@
   "license": "Apache-2.0",
   "description": "E2E mobile app testing done right, with the Playwright test runner",
   "dependencies": {
-    "@empiricalrun/llm": "^0.25.2",
     "@ffmpeg-installer/ffmpeg": "^1.1.0",
     "@playwright/test": "^1.58.1",
     "appium": "^3.2.0",
@@ -41,11 +40,21 @@
     "form-data": "4.0.5",
     "node-fetch": "^3.3.2",
     "picocolors": "^1.1.1",
-    "webdriver": "^9.23.2"
+    "webdriver": "^9.23.2",
+    "zod": "^4.0.1"
+  },
+  "peerDependencies": {
+    "@empiricalrun/llm": "^0.25.2"
+  },
+  "peerDependenciesMeta": {
+    "@empiricalrun/llm": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@changesets/cli": "^2.29.8",
     "@empiricalrun/eslint-config": "^0.5.0",
+    "@empiricalrun/llm": "^0.25.2",
     "@empiricalrun/typescript-config": "^0.3.0",
     "@types/async-retry": "^1.4.9",
     "@types/fluent-ffmpeg": "^2.1.28",
