@@ -37,7 +37,8 @@ On a simulator, the host side is reachable directly:
   does not treat as apps (`com.apple.SafariViewService`, which hosts an
   `ASWebAuthenticationSession`). Not an error when nothing by that id is running. On Android
   `force` changes nothing — the driver's terminate is already a force-stop — and a physical iOS
-  device throws.
+  device throws. Keep the plain terminate for the app under test: killed behind WebDriverAgent's
+  back, it is reported as crashed until `activateApp()`.
 
 Both throw on anything but a simulator. `appContainerPath()` with `pullFile()` (below) is the
 route that works on every device.
