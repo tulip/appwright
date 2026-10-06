@@ -33,12 +33,20 @@ function device(client: WebDriverClient, provider = 'emulator'): Device {
   return new Device(client, APP, { expectTimeout: 1_000 }, provider);
 }
 
-/** Makes the next `execFile` call succeed with `stdout`, or fail with `stderr`. */
-function execFileResult({ stdout = '', stderr }: { stdout?: string; stderr?: string }) {
+/** Makes the next `execFile` call succeed with `stdout`, or fail with `stderr` and exit `code`. */
+function execFileResult({
+  stdout = '',
+  stderr,
+  code = 1,
+}: {
+  stdout?: string;
+  stderr?: string;
+  code?: number;
+}) {
   execFile.mockImplementationOnce((...args: unknown[]) => {
     const callback = args[args.length - 1] as (error: unknown, result?: unknown) => void;
     if (stderr != null) {
-      callback(Object.assign(new Error('Command failed'), { stderr }));
+      callback(Object.assign(new Error('Command failed'), { stderr, code }));
     } else {
       callback(null, { stdout, stderr: '' });
     }
@@ -140,12 +148,19 @@ describe('terminateApp({ force: true })', () => {
   });
 
   test('an app that is not running is not an error; anything else is', async () => {
+    // simctl's real answer: ESRCH (3), with the message.
     execFileResult({
       stderr: 'Simulator device failed to terminate x.\nfound nothing to terminate',
+      code: 3,
     });
     await device(mockClient(false)).terminateApp('x', { force: true });
+    // Either signal alone is enough.
+    execFileResult({ stderr: 'An error was encountered processing the command', code: 3 });
+    await device(mockClient(false)).terminateApp('x', { force: true });
+    execFileResult({ stderr: 'found nothing to terminate', code: 1 });
+    await device(mockClient(false)).terminateApp('x', { force: true });
 
-    execFileResult({ stderr: 'Invalid device: nope' });
+    execFileResult({ stderr: 'Invalid device: nope', code: 148 });
     await expect(device(mockClient(false)).terminateApp('x', { force: true })).rejects.toThrow(
       'Invalid device: nope',
     );
