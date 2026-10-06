@@ -1,6 +1,10 @@
 import { Device } from '../device';
 
 export type ActionOptions = {
+  /**
+   * How long to wait for the element, in milliseconds. Defaults to the project's
+   * `expectTimeout`; `0` makes a single attempt.
+   */
   timeout: number;
 };
 
