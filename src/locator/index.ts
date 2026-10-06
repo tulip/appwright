@@ -295,19 +295,30 @@ export class Locator {
   }
 
   async waitFor(state: ElementState, options?: ActionOptions): Promise<void> {
-    const timeoutFromConfig = this.timeoutOpts.expectTimeout;
-    const timeout = options?.timeout || timeoutFromConfig;
-    const result = await this.waitUntil(async () => {
+    await this.waitForElementId(state, options);
+  }
+
+  /**
+   * Polls until the element is in `state`, then returns the reference id of the element the
+   * poll found there (`null` for 'hidden', which nothing need match), so an action can use it
+   * without looking the element up again. `timeout: 0` makes a single attempt.
+   */
+  private async waitForElementId(
+    state: ElementState,
+    options?: ActionOptions,
+  ): Promise<string | null> {
+    const timeout = options?.timeout ?? this.timeoutOpts.expectTimeout;
+    return await this.waitUntil(async () => {
       const element = await this.getElement();
       const elementId = element?.[ELEMENT_REFERENCE_ID];
 
       if (!elementId) {
         // Nothing matches: that is exactly 'hidden', and not yet 'attached' or 'visible'.
-        return state === 'hidden';
+        return state === 'hidden' ? null : false;
       }
 
       if (state === 'attached') {
-        return true;
+        return elementId;
       }
 
       let isDisplayed: boolean;
@@ -324,7 +335,10 @@ export class Locator {
         throw error;
       }
 
-      return state === 'hidden' ? !isDisplayed : isDisplayed;
+      if (state === 'hidden') {
+        return isDisplayed ? false : null;
+      }
+      return isDisplayed ? elementId : false;
     }, timeout).catch((error: unknown) => {
       if (error instanceof TimeoutError) {
         const what = state === 'hidden' ? 'was still on the screen' : `did not become ${state}`;
@@ -332,7 +346,6 @@ export class Locator {
       }
       throw error;
     });
-    return result;
   }
 
   private async waitUntil<ReturnValue>(
@@ -498,17 +511,23 @@ export class Locator {
   }
 
   /**
-   * Waits for the element to be visible and returns its reference id, or throws with the
-   * action's name so the failure reads as "Failed to fill: …" rather than a bare timeout.
+   * Waits for the element to be visible and returns the reference id the wait found it under,
+   * or throws with the action's name so the failure reads as "Failed to fill: …" rather than a
+   * bare timeout. Finding it again would cost a second lookup per action, and on iOS every XPath
+   * lookup is a full page-source snapshot.
    */
   private async requireVisibleElementId(action: string, options?: ActionOptions): Promise<string> {
-    const isElementDisplayed = await this.isVisible(options);
-    if (!isElementDisplayed) {
-      throw new Error(`Failed to ${action}: Element ${this.named} not visible`);
+    let elementId: string | null;
+    try {
+      elementId = await this.waitForElementId('visible', options);
+    } catch (error) {
+      if (error instanceof TimeoutError) {
+        throw new Error(`Failed to ${action}: Element ${this.named} not visible`);
+      }
+      throw error;
     }
-    const element = await this.getElement();
-    const elementId = element?.[ELEMENT_REFERENCE_ID];
     if (!elementId) {
+      // Unreachable: a 'visible' wait resolves only with an element.
       throw new Error(`Failed to ${action}: Element ${this.named} is not found`);
     }
     return elementId;
