@@ -12,13 +12,55 @@ import {
 import {
   AppwrightLocator,
   AriaRole,
+  AttachOptions,
   LabelOptions,
+  NATIVE_CONTEXT,
   Platform,
   RoleOptions,
   TextOptions,
 } from '../types';
 import { NonRetryableError } from '../types/errors';
-import { boxedStep, escapeQuotes, isNoSuchWindowError } from '../utils';
+import { boxedStep, contextName, delay, escapeQuotes, isNoSuchWindowError } from '../utils';
+
+/**
+ * Appium names a browser's context after its DevTools socket, not its package, and every Chrome
+ * channel serves `chrome_devtools_remote`: with a Custom Tab in front, the foreground package is
+ * `com.android.chrome` and its context `WEBVIEW_chrome`.
+ */
+const ANDROID_BROWSER_CONTEXTS: Record<string, string> = {
+  'com.android.chrome': 'WEBVIEW_chrome',
+  'com.chrome.beta': 'WEBVIEW_chrome',
+  'com.chrome.dev': 'WEBVIEW_chrome',
+  'com.chrome.canary': 'WEBVIEW_chrome',
+};
+
+/** The session itself is gone: no amount of re-attaching can help. */
+const FATAL_SESSION_ERRORS = [
+  'invalid session id',
+  'Session does not exist',
+  'A session is either terminated or not started',
+  'ECONNREFUSED',
+];
+
+const ATTACH_TIMEOUT_MS = 60_000;
+const ATTACH_POLL_INTERVAL_MS = 1_000;
+
+/** How long the WEBVIEW contexts have to stay unchanged for `settle` to count them as settled. */
+const CONTEXTS_SETTLE_WINDOW_MS = 5_000;
+const CONTEXTS_SETTLE_SAMPLE_MS = 1_000;
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function urlMatches(url: string, pageUrl: string | RegExp): boolean {
+  if (typeof pageUrl === 'string') {
+    return url.includes(pageUrl);
+  }
+  // A `g`/`y` RegExp resumes from where its previous test() matched.
+  pageUrl.lastIndex = 0;
+  return pageUrl.test(url);
+}
 
 /**
  * WebView class for interacting with WebView content in hybrid mobile apps.
@@ -46,8 +88,136 @@ export class WebView {
 
     if (!currentContext.includes('WEBVIEW')) {
       await this.switchToWebviewContext();
-      // await this.waitForPageReady();
     }
+  }
+
+  /**
+   * Binds the session to a live page and returns the context it bound. Use it whenever the page
+   * behind the WebView may have changed underneath the test: after the app reloads or rebuilds
+   * its WebView, after a relaunch, and to drive (or leave) a browser the app handed off to.
+   *
+   * Other `webView` calls only check that *some* WEBVIEW context is current, which is still true
+   * once the page behind it is gone. This switches to `NATIVE_APP` and back every attempt —
+   * Appium skips its own check for a dead page when asked for the context it is already in —
+   * then retries until the page reports `document.readyState` `interactive` or `complete` and
+   * `probeSelector`, if given, is in its DOM.
+   *
+   * **Usage:**
+   * ```js
+   * // The app rebuilt its WebView: wait for the login form of the new page.
+   * await webView.attach({ probeSelector: '[data-testid="login-badgeid"]' });
+   *
+   * // Drive the sign-in page a Chrome Custom Tab is showing.
+   * await webView.attach({ context: 'WEBVIEW_chrome', pageUrl: '/oauth2/authorize' });
+   * ```
+   */
+  @boxedStep
+  async attach({
+    context,
+    pageUrl,
+    probeSelector,
+    timeout = ATTACH_TIMEOUT_MS,
+    settle = false,
+  }: AttachOptions = {}): Promise<string> {
+    const deadline = Date.now() + timeout;
+    if (settle) {
+      await this.waitForContextsToSettle(deadline);
+    }
+
+    let lastError: unknown;
+    for (;;) {
+      try {
+        await this.device.switchContext(NATIVE_CONTEXT);
+        const target = context ?? (await this.findWebViewContext());
+        if (!target) {
+          throw new Error('no WebView context is available yet');
+        }
+        await this.device.switchContext(target);
+        if (pageUrl != null) {
+          await this.switchToPage(pageUrl);
+        }
+
+        const readyState = await this.device.evaluate<string>('return document.readyState');
+        if (readyState !== 'complete' && readyState !== 'interactive') {
+          throw new Error(`document.readyState is "${readyState}"`);
+        }
+        if (probeSelector != null) {
+          const found = await this.device.evaluate<boolean>(
+            `return document.querySelector(${JSON.stringify(probeSelector)}) != null;`,
+          );
+          if (!found) {
+            throw new Error(`"${probeSelector}" is not in the DOM yet`);
+          }
+        }
+
+        console.log('[WebView] Attached to', target);
+        return target;
+      } catch (error) {
+        if (FATAL_SESSION_ERRORS.some((fatal) => errorMessage(error).includes(fatal))) {
+          throw error;
+        }
+        lastError = error;
+      }
+      if (Date.now() >= deadline) {
+        break;
+      }
+      await delay(ATTACH_POLL_INTERVAL_MS);
+    }
+
+    const what = probeSelector != null ? `a page containing "${probeSelector}"` : 'a live page';
+    // Every context Appium reports, unfiltered: otherwise the error reads as "there is no
+    // WebView" when one plainly exists but belongs to an app that is not in front.
+    let available = 'unknown';
+    try {
+      available = JSON.stringify((await this.device.contexts()).map(contextName));
+    } catch {
+      // The session is gone; the message still says what it can.
+    }
+    throw new Error(
+      `attach: could not reach ${what}${context != null ? ` in ${context}` : ''} within ` +
+        `${timeout}ms. Contexts Appium reports: ${available}. Last error: ${errorMessage(
+          lastError,
+        )}`,
+    );
+  }
+
+  /** Blocks until the set of WEBVIEW contexts has not changed for `CONTEXTS_SETTLE_WINDOW_MS`. */
+  private async waitForContextsToSettle(deadline: number): Promise<void> {
+    const webViews = async () =>
+      JSON.stringify(
+        (await this.device.contexts())
+          .map(contextName)
+          .filter((name) => name.includes('WEBVIEW'))
+          .sort(),
+      );
+
+    let previous = await webViews();
+    let unchangedSince = Date.now();
+    while (Date.now() < deadline && Date.now() - unchangedSince < CONTEXTS_SETTLE_WINDOW_MS) {
+      await delay(CONTEXTS_SETTLE_SAMPLE_MS);
+      const current = await webViews();
+      if (current !== previous) {
+        previous = current;
+        unchangedSince = Date.now();
+      }
+    }
+  }
+
+  /**
+   * Points the bound context at the page (window) whose URL matches. Throws, for the caller to
+   * retry, while there is none: a freshly opened tab takes a moment to be listed.
+   */
+  private async switchToPage(pageUrl: string | RegExp): Promise<void> {
+    const seen: string[] = [];
+    for (const handle of await this.device.getWindowHandles()) {
+      await this.device.switchToWindow(handle);
+      const url = await this.device.getUrl();
+      if (urlMatches(url, pageUrl)) {
+        return;
+      }
+      seen.push(url);
+    }
+    throw new Error(`no page matching ${String(pageUrl)} yet; open pages: ${JSON.stringify(seen)}`);
   }
 
   /**
@@ -343,44 +513,35 @@ export class WebView {
     return await this.device.evaluate<T>(script);
   }
 
-  private async switchToWebviewContext(): Promise<void> {
-    /**
-     * On Android, the chromedriver (which Appium and UiAutomator2 uses under the hood) scans the entire device's debug ports.
-     * It might see webviews from the system browser, background apps, or even the some widgets.
-     * We are using filterByCurrentApp to only list webviews for the current app.
-     *
-     * This is not an issue on iOS as XCUITest creates a session specifically for the app running only lists webviews for the current app by default.
-     *
-     * If issues are found in the future, we can considering filtering contexts for iOS as well. Webviews on iOS are typically named like WEBVIEW_<PID>
-     */
-    const filterByCurrentApp = this.device.getPlatform() == Platform.ANDROID;
-    const currentBundleId = filterByCurrentApp ? await this.device.getCurrentBundleId() : undefined;
+  /**
+   * The WEBVIEW context to bind, or `undefined` while there is none.
+   *
+   * On Android the chromedriver behind Appium sees every debuggable WebView on the device — the
+   * system browser, background apps, widgets — so only those of the app in the foreground count.
+   * A browser in front is matched through `ANDROID_BROWSER_CONTEXTS`, since its context is named
+   * after its DevTools socket rather than its package. XCUITest lists the app's own WebViews
+   * only, so iOS takes the first one.
+   */
+  private async findWebViewContext(): Promise<string | undefined> {
+    const foreground =
+      this.device.getPlatform() == Platform.ANDROID
+        ? await this.device.getCurrentBundleId()
+        : undefined;
+    const contexts = (await this.device.contexts())
+      .map(contextName)
+      .filter((name) => name.includes('WEBVIEW'))
+      .filter(
+        (name) =>
+          !foreground || name.includes(foreground) || name === ANDROID_BROWSER_CONTEXTS[foreground],
+      );
+    console.log('[WebView] Available contexts from Appium:', contexts);
+    return contexts[0];
+  }
 
+  private async switchToWebviewContext(): Promise<void> {
     await retry(
       async () => {
-        const appiumContexts = await this.device.contexts();
-
-        const contexts = appiumContexts.map((context) => {
-          if (typeof context === 'string') {
-            return context;
-          } else {
-            return context.title;
-          }
-        });
-
-        const filteredContexts = filterByCurrentApp
-          ? contexts.filter((ctx) => {
-              if (filterByCurrentApp && currentBundleId && ctx?.includes('WEBVIEW')) {
-                return ctx.includes(currentBundleId);
-              }
-              return true;
-            })
-          : contexts;
-
-        console.log('[WebView] Available contexts from Appium:', filteredContexts);
-
-        const webviewContext = filteredContexts.find((ctx) => ctx?.includes('WEBVIEW'));
-
+        const webviewContext = await this.findWebViewContext();
         if (!webviewContext) {
           throw new Error('No WebView context found. Make sure your app has a WebView loaded.');
         }
@@ -397,27 +558,5 @@ export class WebView {
         },
       },
     );
-  }
-
-  private async waitForPageReady(timeout = 5000): Promise<void> {
-    const start = Date.now();
-    while (Date.now() - start < timeout) {
-      try {
-        // Wrap with recovery logic - it handles window closure automatically
-        const state = await this.recoverFromWindowClosure(async () => {
-          return await this.device.evaluate<string>('return document.readyState');
-        });
-
-        if (state === 'complete' || state === 'interactive') {
-          console.log('[WebView] Page ready, state:', state);
-          return;
-        }
-      } catch (e) {
-        // Page not ready yet (non-window errors), continue waiting
-        console.log('[WebView] Page not ready yet, will retry...');
-      }
-      await new Promise((resolve) => setTimeout(resolve, 500));
-    }
-    console.log('[WebView] Page ready check timed out, proceeding anyway');
   }
 }

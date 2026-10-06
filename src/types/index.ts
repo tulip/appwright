@@ -171,6 +171,32 @@ export type TerminateAppOptions = {
   force?: boolean;
 };
 
+export type AttachOptions = {
+  /**
+   * Bind this context by name instead of discovering one, e.g. `'WEBVIEW_chrome'` for a Chrome
+   * Custom Tab. Without it, the WebView of the app in the foreground is bound — a Chrome
+   * browser's `WEBVIEW_chrome` included, when Chrome is the app in front.
+   */
+  context?: string;
+  /**
+   * The page to drive: one whose URL contains this string, or matches this RegExp. A browser
+   * context spans every open tab, and chromedriver otherwise lands on whichever one Chrome lists
+   * first, such as the new-tab page its first-run screens leave behind.
+   */
+  pageUrl?: string | RegExp;
+  /** A CSS selector that must be in the page's DOM before the attach counts. */
+  probeSelector?: string;
+  /** How long to keep trying, in milliseconds. Defaults to 60 000. */
+  timeout?: number;
+  /**
+   * First wait until the set of WEBVIEW contexts has stopped changing for 5 s. On iOS a relaunch
+   * replaces the page (`WEBVIEW_<pid>.1` with `.2`), and a script sent to the outgoing page does
+   * not fail but holds the session for the driver's `webviewAtomWaitTimeout` (120 s) — while
+   * listing contexts cannot hang. Costs at least 5 s, so it is off by default.
+   */
+  settle?: boolean;
+};
+
 export type OpenUrlOptions = {
   /**
    * Open the URL in this app (Android package name or iOS bundle id) instead of the platform's

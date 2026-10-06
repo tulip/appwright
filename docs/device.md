@@ -165,6 +165,11 @@ await device.activateApp();
 - `device.waitForAppToClose(appId, { timeout, pollInterval })` — blocks until `appId` leaves the
   foreground, e.g. a browser closing itself once an auth flow redirects back to the app.
 
+To drive the page a browser shows rather than its native chrome, bind it with
+`webView.attach({ pageUrl })` (see [Attaching to a page](locators.md#attaching-to-a-page)). With
+Chrome in front, discovery picks Chrome's `WEBVIEW_chrome` context, so after the browser closes,
+attach again to get back to the app's own WebView.
+
 ## The software keyboard
 
 - `device.isKeyboardShown()`: whether the software keyboard is on screen. On Android the IME is

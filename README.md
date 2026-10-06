@@ -59,6 +59,7 @@ test('WebView login test', async ({ device, webView }) => {
 - `webView.getByXpath()` - XPath expressions
 - `webView.getByPlaceholder()` - Input placeholder text
 - `webView.evaluate()` - Execute JavaScript in WebView context
+- `webView.attach()` - Re-bind a live page after a reload, relaunch or browser hand-off
 
 Locators chain: `webView.getByTestId('menu').getByRole('button', { name: 'Settings' })`.
 
