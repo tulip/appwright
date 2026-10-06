@@ -89,6 +89,49 @@ describe("waitFor('hidden')", () => {
   });
 });
 
+describe('timeout: 0', () => {
+  test('isVisible makes exactly one attempt instead of waiting expectTimeout', async () => {
+    const client = mockClient({ findElements: vi.fn().mockResolvedValue([]) });
+    const locator = new Locator(client, { expectTimeout: 20_000 }, '//field', 'xpath');
+    expect(await locator.isVisible({ timeout: 0 })).toBe(false);
+    expect(client.findElements).toHaveBeenCalledTimes(1);
+  });
+
+  test("waitFor('hidden') checks once, then times out", async () => {
+    const client = mockClient();
+    await expect(nativeLocator(client).waitFor('hidden', { timeout: 0 })).rejects.toThrow(
+      'Element "//field" was still on the screen after 0ms',
+    );
+    expect(client.findElements).toHaveBeenCalledTimes(1);
+    expect(client.isElementDisplayed).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('one lookup per action', () => {
+  test('acts on the element the visibility wait found', async () => {
+    const client = mockClient({
+      getElementRect: vi.fn().mockResolvedValue({ x: 0, y: 0, width: 1, height: 1 }),
+    });
+    const locator = nativeLocator(client);
+    await locator.tap();
+    expect(client.findElements).toHaveBeenCalledTimes(1);
+    expect(client.elementClick).toHaveBeenCalledWith('element-id');
+
+    await locator.boundingBox();
+    expect(client.findElements).toHaveBeenCalledTimes(2);
+  });
+
+  test('a chained locator looks its parent up once too', async () => {
+    const client = mockClient({
+      findElementsFromElement: vi.fn().mockResolvedValue([{ [ELEMENT_REFERENCE_ID]: 'child' }]),
+    });
+    await nativeLocator(client).getByText('Save').tap();
+    expect(client.findElements).toHaveBeenCalledTimes(1);
+    expect(client.findElementsFromElement).toHaveBeenCalledTimes(1);
+    expect(client.elementClick).toHaveBeenCalledWith('child');
+  });
+});
+
 describe('fill', () => {
   test('native Android: clears, types, reads back — without tapping, so no keyboard', async () => {
     const client = mockClient({
@@ -302,6 +345,8 @@ describe('boundingBox', () => {
       height: 44,
     });
     expect(client.getElementRect).toHaveBeenCalledWith('element-id');
+    // Two polls, and no lookup after the one that saw it displayed.
+    expect(client.findElements).toHaveBeenCalledTimes(2);
   });
 
   test('throws, naming the element, when it never shows', async () => {
