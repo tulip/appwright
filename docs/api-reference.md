@@ -27,6 +27,7 @@ The `webView` fixture provides methods for interacting with WebView content in h
 - `webView.getByXpath(xpath)` - Select by XPath expression
 - `webView.getByPlaceholder(text)` - Select input by placeholder text
 - `webView.evaluate(script)` - Execute JavaScript in WebView context
+- `webView.attach(options?)` - Bind a live page: after a reload or relaunch, or in a browser
 
 ### Usage Example
 
