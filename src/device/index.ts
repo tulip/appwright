@@ -7,25 +7,38 @@ import type { z } from 'zod';
 import { CHAIN_METHODS, Locator } from '../locator';
 import { LocatorQuery, nativeIdQuery, nativeLabelQuery, nativeTextQuery } from '../locator/queries';
 import { logger } from '../logger';
+import { readBuildInfo } from '../providers/appium';
 import { uploadImageToBS } from '../providers/browserstack/utils';
 import { uploadImageToLambdaTest } from '../providers/lambdatest/utils';
 import {
+  AlertButtonOptions,
+  AppState,
   AppwrightLocator,
+  BuildInfo,
+  DeviceOrientation,
+  DragOptions,
   ExtractType,
   IdOptions,
   LabelOptions,
   NATIVE_CONTEXT,
   OpenUrlOptions,
   Platform,
+  Rect,
+  ScreenEdge,
+  SetOrientationOptions,
+  SwipeFromEdgeOptions,
   TerminateAppOptions,
   TextOptions,
   TimeoutOptions,
   VisionModel,
   WaitForAppToCloseOptions,
   WaitForFileOptions,
+  WaitForWebPageOptions,
+  WebPage,
 } from '../types';
-import { boxedStep, contextName, delay } from '../utils';
+import { boxedStep, contextName, delay, errorMessage, urlMatches } from '../utils';
 import { AppwrightVision, VisionProvider } from '../vision';
+import { hasLoadedUrl, toWebPages } from './web-pages';
 
 /** Providers whose devices are in a cloud: a local build file cannot be installed on them. */
 const CLOUD_PROVIDERS = ['browserstack', 'lambdatest'];
@@ -50,13 +63,70 @@ const UDID_CAPABILITIES = ['deviceUDID', 'appium:deviceUDID', 'udid', 'appium:ud
 const SIMCTL_NO_SUCH_PROCESS = 3;
 const SIMCTL_NOT_RUNNING = 'found nothing to terminate';
 
+/** Android's `KEYCODE_BACK`. */
+const ANDROID_KEYCODE_BACK = 4;
+
+/** Android's baseline density: a dp is `dpi / 160` physical pixels. */
+const ANDROID_BASELINE_DPI = 160;
+
+const ORIENTATION_TIMEOUT_MS = 10_000;
+const ORIENTATION_POLL_MS = 250;
+
+/**
+ * WebDriverAgent's refusal to rotate: the home screen (SpringBoard) is portrait-only, and a modal
+ * mid-animation refuses too. Matched against the error text, the only signal WDA gives; if the
+ * wording changes, the refusal comes through without the explanation.
+ */
+const IOS_CANNOT_ROTATE = 'Unable To Rotate Device';
+
+/** WebDriverAgent's `defaultAlertAction` values. */
+const ALERT_ACCEPT = 'accept';
+const ALERT_DISMISS = 'dismiss';
+const ALERT_NONE = '';
+
+const DRAG_DURATION_MS = 400;
+
+/** Held after the press so the touch reads as a drag, not a fling or a long press. */
+const DRAG_HOLD_MS = 100;
+
+const WEB_PAGE_TIMEOUT_MS = 30_000;
+const WEB_PAGE_POLL_MS = 500;
+
 const execFilePromise = promisify(execFile);
 
 function trimLeadingSlashes(relativePath: string): string {
   return relativePath.replace(/^\/+/, '');
 }
 
+/** The driver reports `PORTRAIT` / `LANDSCAPE`; some report lower case or a variant. */
+function toDeviceOrientation(reported: string): DeviceOrientation {
+  const upper = String(reported).toUpperCase();
+  if (upper.includes('LANDSCAPE')) {
+    return DeviceOrientation.LANDSCAPE;
+  }
+  if (upper.includes('PORTRAIT')) {
+    return DeviceOrientation.PORTRAIT;
+  }
+  throw new Error(`The driver reported an orientation appwright does not know: "${reported}".`);
+}
+
+function shapeOf({ width, height }: Rect): DeviceOrientation | undefined {
+  if (width > height) {
+    return DeviceOrientation.LANDSCAPE;
+  }
+  return width < height ? DeviceOrientation.PORTRAIT : undefined;
+}
+
 export class Device {
+  /**
+   * WebDriverAgent's `defaultAlertAction` in this session: what the capabilities set it to,
+   * until `setAlertAutoAccept()` changes it. Appium has no way to read the setting back.
+   */
+  private alertAction?: string;
+
+  /** Set once `setOrientation()` runs, so the fixture rotates the device back after the test. */
+  private rotated = false;
+
   constructor(
     private webDriverClient: WebDriverClient,
     /** The app under test, read off the build. Not the foreground app. */
@@ -397,6 +467,47 @@ export class Device {
   }
 
   /**
+   * What the build file declares about itself — bundle id, version and build number — read on
+   * the host from the project's `buildPath` (`.app`, `.ipa` or `.apk`), so a test can compare
+   * the version the app shows with the one it was built as. An `.apk` needs `ANDROID_HOME`,
+   * for `aapt`.
+   *
+   * **Usage:**
+   * ```js
+   * const { version } = await device.getBuildInfo();
+   * await expect(device.getByText(version, { exact: true })).toBeVisible();
+   * ```
+   *
+   * @param buildPath Defaults to the project's `buildPath`.
+   */
+  async getBuildInfo(buildPath: string | undefined = this.buildPath): Promise<BuildInfo> {
+    if (!buildPath) {
+      throw new Error(
+        'getBuildInfo() needs a build path: none was given and the project has no `buildPath`.',
+      );
+    }
+    return await readBuildInfo(buildPath);
+  }
+
+  /**
+   * The run state of `appId` (by default the app under test): not installed, not running,
+   * suspended, in the background or in front. Both drivers' terminate already waits for the app
+   * to stop; this is how a test proves a relaunch really relaunched. Leaves the session in
+   * NATIVE_APP.
+   *
+   * **Usage:**
+   * ```js
+   * await device.terminateApp();
+   * expect(await device.getAppState()).toBe(AppState.NotRunning);
+   * await device.activateApp();
+   * ```
+   */
+  async getAppState(appId: string = this.getAppBundleId()): Promise<AppState> {
+    await this.ensureNativeContext();
+    return await this.executeMobileCommand<AppState>('mobile: queryAppState', this.appIdArg(appId));
+  }
+
+  /**
    * Runs an Appium `mobile:` extension command that appwright does not wrap. Prefer the typed
    * methods where one exists — they hide the per-driver argument names (`appId` on Android,
    * `bundleId` on iOS).
@@ -527,6 +638,115 @@ export class Device {
             : '.'),
       );
     }
+  }
+
+  /**
+   * [iOS] Turns WebDriverAgent's automatic alert answering on or off. Every appwright provider
+   * creates the session with `appium:autoAcceptAlerts`, under which WebDriverAgent taps the last
+   * button of any alert within about two seconds — system permission prompts, but also the app's
+   * own `Alert.alert` confirmations, before the test can look at them. Turn it off around a step
+   * that has to see or answer an alert itself, or use `withAlertAutoAccept()`.
+   *
+   * A no-op on Android, which answers no alert by itself (`appium:autoGrantPermissions` covers
+   * permission prompts there).
+   */
+  @boxedStep
+  async setAlertAutoAccept(enabled: boolean): Promise<void> {
+    await this.applyAlertAction(enabled ? ALERT_ACCEPT : ALERT_NONE);
+  }
+
+  /**
+   * Runs `fn` with alert auto-accept set to `enabled` (see `setAlertAutoAccept()`), then restores
+   * what the session had before. When `fn` throws, its error is the one reported: a restore that
+   * fails after it is only logged. On Android this only runs `fn`.
+   *
+   * **Usage:**
+   * ```js
+   * await device.withAlertAutoAccept(false, async () => {
+   *   await device.getById("clear-instance-button").tap();
+   *   expect(await device.getAlertText()).toContain("Are you sure?");
+   *   await device.acceptAlert({ buttonLabel: "Clear Data" });
+   * });
+   * ```
+   */
+  async withAlertAutoAccept<T>(enabled: boolean, fn: () => Promise<T>): Promise<T> {
+    const previous = this.currentAlertAction();
+    await this.setAlertAutoAccept(enabled);
+
+    let result: T;
+    try {
+      result = await fn();
+    } catch (error) {
+      await this.applyAlertAction(previous).catch((restoreError: unknown) => {
+        logger.warn(
+          `withAlertAutoAccept: could not restore defaultAlertAction "${previous}": ` +
+            errorMessage(restoreError),
+        );
+      });
+      throw error;
+    }
+    await this.applyAlertAction(previous);
+    return result;
+  }
+
+  private currentAlertAction(): string {
+    if (this.alertAction === undefined) {
+      const capabilities = (this.webDriverClient.capabilities ?? {}) as Record<string, unknown>;
+      const capability = (name: string) => capabilities[name] ?? capabilities[`appium:${name}`];
+      this.alertAction =
+        capability('autoAcceptAlerts') === true
+          ? ALERT_ACCEPT
+          : capability('autoDismissAlerts') === true
+          ? ALERT_DISMISS
+          : ALERT_NONE;
+    }
+    return this.alertAction;
+  }
+
+  private async applyAlertAction(action: string): Promise<void> {
+    if (this.getPlatform() != Platform.IOS) {
+      return;
+    }
+    await this.webDriverClient.updateSettings({ defaultAlertAction: action });
+    this.alertAction = action;
+  }
+
+  /**
+   * Answers the alert on screen with its accept button — XCUITest's default accept button on iOS,
+   * the dialog's positive button on Android — or with the button labelled `buttonLabel`. Covers
+   * the app's own alerts as well as system prompts. On iOS, turn auto-accept off first or
+   * WebDriverAgent may answer before the test does (`withAlertAutoAccept()`). Leaves the session
+   * in NATIVE_APP.
+   */
+  @boxedStep
+  async acceptAlert({ buttonLabel }: AlertButtonOptions = {}): Promise<void> {
+    await this.answerAlert(ALERT_ACCEPT, buttonLabel);
+  }
+
+  /** Answers the alert on screen with its dismiss (cancel) button; see `acceptAlert()`. */
+  @boxedStep
+  async dismissAlert({ buttonLabel }: AlertButtonOptions = {}): Promise<void> {
+    await this.answerAlert(ALERT_DISMISS, buttonLabel);
+  }
+
+  private async answerAlert(
+    action: typeof ALERT_ACCEPT | typeof ALERT_DISMISS,
+    buttonLabel?: string,
+  ): Promise<void> {
+    await this.ensureNativeContext();
+    const label = buttonLabel == null ? {} : { buttonLabel };
+    if (this.isAndroid()) {
+      const command = action === ALERT_ACCEPT ? 'mobile: acceptAlert' : 'mobile: dismissAlert';
+      await this.executeMobileCommand(command, label);
+    } else {
+      await this.executeMobileCommand('mobile: alert', { action, ...label });
+    }
+  }
+
+  /** The title and message of the alert on screen. Leaves the session in NATIVE_APP. */
+  async getAlertText(): Promise<string> {
+    await this.ensureNativeContext();
+    return await this.webDriverClient.getAlertText();
   }
 
   /**
@@ -1025,6 +1245,193 @@ export class Device {
   }
 
   /**
+   * The app window's position and size in the driver's units (see `Rect`). On iOS it is the
+   * window of the app in front: SpringBoard's, portrait, while the app under test is not.
+   * Leaves the session in NATIVE_APP.
+   */
+  async getWindowRect(): Promise<Rect> {
+    await this.ensureNativeContext();
+    const { x, y, width, height } = await this.webDriverClient.getWindowRect();
+    return { x, y, width, height };
+  }
+
+  /**
+   * The orientation the driver reports. On iOS it is the orientation of the app in front, so it
+   * reads portrait while the home screen is up whatever way the device is held. Leaves the
+   * session in NATIVE_APP.
+   */
+  async getOrientation(): Promise<DeviceOrientation> {
+    await this.ensureNativeContext();
+    return toDeviceOrientation(await this.webDriverClient.getOrientation());
+  }
+
+  /**
+   * Rotates the device and returns the window rectangle once the rotation has taken effect: the
+   * driver reports `orientation` and the window has its shape (wider than tall for landscape).
+   * The project's `device.orientation` applies only when a session starts; this rotates
+   * mid-test. After a test that rotated, the `device` fixture rotates the device back to the
+   * configured orientation, since a rotation outlives the session.
+   *
+   * On iOS the app under test has to be in front — the home screen is portrait-only — and no
+   * modal may be mid-animation, or WebDriverAgent answers "Unable To Rotate Device". That refusal
+   * is not retried, which would hide a real one. Leaves the session in NATIVE_APP.
+   *
+   * **Usage:**
+   * ```js
+   * const window = await device.setOrientation(DeviceOrientation.LANDSCAPE);
+   * ```
+   */
+  @boxedStep
+  async setOrientation(
+    orientation: DeviceOrientation,
+    { timeout = ORIENTATION_TIMEOUT_MS }: SetOrientationOptions = {},
+  ): Promise<Rect> {
+    await this.ensureNativeContext();
+    try {
+      await this.webDriverClient.setOrientation(orientation.toUpperCase());
+    } catch (error) {
+      if (!errorMessage(error).includes(IOS_CANNOT_ROTATE)) {
+        throw error;
+      }
+      throw new Error(
+        `setOrientation(${orientation}): WebDriverAgent refused to rotate. On iOS the app under ` +
+          'test has to be in front (the home screen is portrait-only) and no modal may be ' +
+          `mid-animation. ${errorMessage(error)}`,
+      );
+    }
+    this.rotated = true;
+
+    const deadline = Date.now() + timeout;
+    for (;;) {
+      const reported = await this.getOrientation();
+      const window = await this.getWindowRect();
+      if (reported === orientation && shapeOf(window) === orientation) {
+        return window;
+      }
+      if (Date.now() >= deadline) {
+        throw new Error(
+          `setOrientation(${orientation}): the device did not settle within ${timeout}ms. The ` +
+            `driver reports ${reported} and the window is ${window.width}x${window.height}.`,
+        );
+      }
+      await delay(ORIENTATION_POLL_MS);
+    }
+  }
+
+  /**
+   * Rotates the device back to `orientation` after a test that rotated it, with the app under
+   * test brought to the front first, as iOS requires. Failures are logged, not thrown: the
+   * test's own result stands.
+   * @internal Called by the `device` fixture.
+   */
+  async restoreOrientation(orientation: DeviceOrientation): Promise<void> {
+    if (!this.rotated) {
+      return;
+    }
+    try {
+      if (this.bundleId && (await this.getCurrentBundleId()) !== this.bundleId) {
+        await this.activateApp();
+      }
+      await this.setOrientation(orientation);
+    } catch (error) {
+      logger.warn(
+        `Could not rotate the device back to ${orientation} after the test: ${errorMessage(error)}`,
+      );
+    }
+  }
+
+  /**
+   * Drags one finger from `from` to `to` with W3C pointer actions: press, hold 100 ms so the
+   * touch reads as a drag rather than a fling, move over `duration`, lift. Positions are in the
+   * driver's units (see `Rect`), so a `boundingBox()` or `getWindowRect()` can be used as is.
+   * Leaves the session in NATIVE_APP.
+   *
+   * **Usage:**
+   * ```js
+   * const box = await device.getById("slider-thumb").boundingBox();
+   * const y = box.y + box.height / 2;
+   * await device.drag({ from: { x: box.x + 5, y }, to: { x: box.x + 200, y } });
+   * ```
+   */
+  @boxedStep
+  async drag({ from, to, duration = DRAG_DURATION_MS }: DragOptions): Promise<void> {
+    await this.ensureNativeContext();
+    await this.webDriverClient.performActions([
+      {
+        type: 'pointer',
+        id: 'finger1',
+        parameters: { pointerType: 'touch' },
+        actions: [
+          { type: 'pointerMove', duration: 0, x: Math.round(from.x), y: Math.round(from.y) },
+          { type: 'pointerDown', button: 0 },
+          { type: 'pause', duration: DRAG_HOLD_MS },
+          { type: 'pointerMove', duration, x: Math.round(to.x), y: Math.round(to.y) },
+          { type: 'pointerUp', button: 0 },
+        ],
+      },
+    ]);
+    await this.webDriverClient.releaseActions();
+  }
+
+  /**
+   * Swipes in from the left or right edge of the window, as for opening a drawer or the back
+   * swipe. The finger goes down `inset` points (iOS) or dp (Android) in from the edge, at `y` (a
+   * fraction of the window height), and travels `distance` (a fraction of the window width).
+   * Leaves the session in NATIVE_APP.
+   *
+   * **Usage:**
+   * ```js
+   * await device.swipeFromEdge("right");
+   * ```
+   */
+  @boxedStep
+  async swipeFromEdge(
+    edge: ScreenEdge,
+    { inset = 2, distance = 0.7, y = 0.5, duration = DRAG_DURATION_MS }: SwipeFromEdgeOptions = {},
+  ): Promise<void> {
+    const window = await this.getWindowRect();
+    const left = window.x;
+    const right = window.x + window.width - 1;
+    const startOffset = inset * (await this.pixelsPerPoint());
+    const travel = window.width * distance;
+    const startX = edge === 'right' ? right - startOffset : left + startOffset;
+    const endX = edge === 'right' ? startX - travel : startX + travel;
+    const atY = window.y + window.height * y;
+
+    await this.drag({
+      from: { x: startX, y: atY },
+      to: { x: Math.min(Math.max(endX, left), right), y: atY },
+      duration,
+    });
+  }
+
+  /** Driver units per point (iOS) or dp (Android): 1 on iOS, the display density on Android. */
+  private async pixelsPerPoint(): Promise<number> {
+    if (!this.isAndroid()) {
+      return 1;
+    }
+    const dpi = await this.executeMobileCommand<number>('mobile: getDisplayDensity');
+    return dpi / ANDROID_BASELINE_DPI;
+  }
+
+  /**
+   * [Android] Presses the system back key. Throws on iOS, which has none: tap the app's own back
+   * control, or `swipeFromEdge('left')` on screens that support the back swipe. Leaves the
+   * session in NATIVE_APP.
+   */
+  @boxedStep
+  async pressBack(): Promise<void> {
+    if (!this.isAndroid()) {
+      throw new Error(
+        "pressBack() is Android only: iOS has no back key. Tap the app's own back control, or " +
+          "swipeFromEdge('left') on screens that support the back swipe.",
+      );
+    }
+    await this.ensureNativeContext();
+    await this.executeMobileCommand('mobile: pressKey', { keycode: ANDROID_KEYCODE_BACK });
+  }
+
+  /**
    * Send keys to already focused input field.
    * To fill input fields using the selectors use `sendKeyStrokes` method from locator
    */
@@ -1141,5 +1548,65 @@ export class Device {
   /** The URL of the page the current WEBVIEW context is driving. */
   async getUrl(): Promise<string> {
     return await this.webDriverClient.getUrl();
+  }
+
+  /**
+   * Every WebView page the session can see, read natively through `mobile: getContexts` without
+   * attaching to any: the app's own pages, a popup's, and on Android every tab of a browser in
+   * front. Leaves the session in NATIVE_APP.
+   */
+  async webPages(): Promise<WebPage[]> {
+    await this.ensureNativeContext();
+    return toWebPages(
+      this.isAndroid(),
+      await this.executeMobileCommand<unknown>('mobile: getContexts'),
+    );
+  }
+
+  /**
+   * Waits for a page that is not among `notIn` to load (a new popup reads `about:blank` for about
+   * a second first) and returns it: a `window.open()` popup, an OAuth window, a new tab. Take
+   * `notIn` from `webPages()` just before the tap that opens the page, and bind the page with
+   * `webView.attach({ context: page.context, pageUrl: page.url })`: plain discovery would bind
+   * the first WebView, not the new one. Leaves the session in NATIVE_APP.
+   *
+   * **Usage:**
+   * ```js
+   * const before = await device.webPages();
+   * await webView.getByRole("link", { name: "Open PDF" }).tap();
+   * const popup = await device.waitForWebPage({ notIn: before, url: ".pdf" });
+   * await webView.attach({ context: popup.context, pageUrl: popup.url });
+   * ```
+   */
+  @boxedStep
+  async waitForWebPage({
+    notIn = [],
+    url,
+    timeout = WEB_PAGE_TIMEOUT_MS,
+    pollInterval = WEB_PAGE_POLL_MS,
+  }: WaitForWebPageOptions = {}): Promise<WebPage> {
+    const knownKeys = new Set(notIn.map((page) => page.key));
+    const knownUrls = new Set(notIn.map((page) => page.url));
+    const deadline = Date.now() + timeout;
+
+    for (;;) {
+      const fresh = (await this.webPages()).filter(
+        (page) => !knownKeys.has(page.key) && !knownUrls.has(page.url),
+      );
+      const found = fresh.find(
+        (page) => hasLoadedUrl(page) && (url == null || urlMatches(page.url, url)),
+      );
+      if (found) {
+        return found;
+      }
+      if (Date.now() >= deadline) {
+        const wanted = url == null ? 'a loaded URL' : `a URL matching ${String(url)}`;
+        throw new Error(
+          `waitForWebPage: no new page with ${wanted} within ${timeout}ms. New pages seen: ` +
+            JSON.stringify(fresh.map((page) => page.url)),
+        );
+      }
+      await delay(pollInterval);
+    }
   }
 }

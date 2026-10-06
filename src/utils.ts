@@ -161,3 +161,17 @@ export function isNoSuchWindowError(error: unknown): boolean {
 export function contextName(context: string | { id: string }): string {
   return typeof context === 'string' ? context : context.id;
 }
+
+export function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/** Whether `url` contains `pattern`, or matches it when it is a RegExp. */
+export function urlMatches(url: string, pattern: string | RegExp): boolean {
+  if (typeof pattern === 'string') {
+    return url.includes(pattern);
+  }
+  // A `g`/`y` RegExp resumes from where its previous test() matched.
+  pattern.lastIndex = 0;
+  return pattern.test(url);
+}

@@ -10,6 +10,7 @@ import {
   ElementReference,
   FillOptions,
   LabelOptions,
+  Rect,
   RoleOptions,
   ScrollDirection,
   TextOptions,
@@ -384,6 +385,13 @@ export class Locator {
   async getText(options?: ActionOptions): Promise<string> {
     const elementId = await this.requireVisibleElementId('getText', options);
     return await this.webDriverClient.getElementText(elementId);
+  }
+
+  @boxedStep
+  async boundingBox(options?: ActionOptions): Promise<Rect> {
+    const elementId = await this.requireVisibleElementId('boundingBox', options);
+    const { x, y, width, height } = await this.webDriverClient.getElementRect(elementId);
+    return { x, y, width, height };
   }
 
   @boxedStep

@@ -234,6 +234,100 @@ export type WaitForFileOptions = {
   isReady?: (contents: Buffer) => boolean;
 };
 
+/**
+ * A rectangle in the driver's units: points on iOS, physical pixels on Android. A WebView
+ * element's rectangle is in the page's CSS pixels instead, relative to the document.
+ */
+export type Rect = { x: number; y: number; width: number; height: number };
+
+/** A screen position in the driver's units, as `Rect`. */
+export type Point = { x: number; y: number };
+
+export type SetOrientationOptions = {
+  /** How long the window may take to take the new shape, in milliseconds. Defaults to 10 000. */
+  timeout?: number;
+};
+
+export type DragOptions = {
+  /** Where the finger goes down, in the driver's units (see `Rect`). */
+  from: Point;
+  /** Where it lifts. */
+  to: Point;
+  /** How long the move takes, in milliseconds. Defaults to 400. */
+  duration?: number;
+};
+
+/** The side of the screen a `swipeFromEdge()` starts from. */
+export type ScreenEdge = 'left' | 'right';
+
+export type SwipeFromEdgeOptions = {
+  /**
+   * How far in from the edge the finger goes down, in points on iOS and dp on Android, so one
+   * value means the same distance on every screen density. Defaults to 2.
+   */
+  inset?: number;
+  /** How far the finger travels, as a fraction of the window width. Defaults to 0.7. */
+  distance?: number;
+  /** The height of the swipe, as a fraction of the window height from the top. Defaults to 0.5. */
+  y?: number;
+  /** How long the move takes, in milliseconds. Defaults to 400. */
+  duration?: number;
+};
+
+/** An app's run state, as both drivers' `mobile: queryAppState` report it. */
+export enum AppState {
+  NotInstalled = 0,
+  NotRunning = 1,
+  Suspended = 2,
+  Background = 3,
+  Foreground = 4,
+}
+
+/** What a build file declares about itself. */
+export type BuildInfo = {
+  /** Bundle id (`CFBundleIdentifier`) or package name. */
+  bundleId: string;
+  /** The user-facing version: `CFBundleShortVersionString` or `versionName`. */
+  version: string;
+  /** `CFBundleVersion` or `versionCode`. */
+  buildNumber: string;
+  /** The build file, as an absolute path. */
+  path: string;
+};
+
+export type AlertButtonOptions = {
+  /** Tap the button with this label instead of the driver's default accept / dismiss button. */
+  buttonLabel?: string;
+};
+
+/** One page of one WebView, as `mobile: getContexts` lists it. */
+export type WebPage = {
+  /** The Appium context to bind it with: `webView.attach({ context, pageUrl: url })`. */
+  context: string;
+  /**
+   * Unique per page: the context on iOS, where each page has its own; the context plus the
+   * DevTools page id on Android, where one context spans every page of a WebView or browser.
+   */
+  key: string;
+  url: string;
+  title: string;
+};
+
+export type WaitForWebPageOptions = {
+  /**
+   * Pages that do not count: usually `await device.webPages()` from just before the tap that
+   * opens the new one. A page whose key or URL is among them is not new — iOS lists a page under
+   * a new context when it reloads.
+   */
+  notIn?: WebPage[];
+  /** A string the page's URL contains, or a RegExp it matches. */
+  url?: string | RegExp;
+  /** Defaults to 30 000 ms. */
+  timeout?: number;
+  /** Defaults to 500 ms. */
+  pollInterval?: number;
+};
+
 export type AppResetMode = 'reinstall' | 'clearData';
 
 export type CleanDeviceOptions = {
@@ -631,6 +725,19 @@ export interface AppwrightLocator {
    * @param options Use this to override the timeout for this action
    */
   getText(options?: ActionOptions): Promise<string>;
+
+  /**
+   * The element's position and size, as Playwright's `boundingBox()` gives them. Waits for the
+   * element to be visible first. Natively the rectangle is in the driver's units — points on iOS,
+   * physical pixels on Android, the units of `device.getWindowRect()` and `device.drag()` — and
+   * in a WebView it is in the page's CSS pixels, relative to the document.
+   *
+   * **Usage:**
+   * ```js
+   * const { width, height } = await device.getByText("Welcome").boundingBox();
+   * ```
+   */
+  boundingBox(options?: ActionOptions): Promise<Rect>;
 
   scroll(direction: ScrollDirection): Promise<void>;
 

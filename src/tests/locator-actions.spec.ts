@@ -288,3 +288,30 @@ describe('clear / press / inputValue', () => {
     expect(await locator.inputValue()).toBe('typed');
   });
 });
+
+describe('boundingBox', () => {
+  test("returns the element's rectangle once it is visible", async () => {
+    const client = mockClient({
+      isElementDisplayed: vi.fn().mockResolvedValueOnce(false).mockResolvedValue(true),
+      getElementRect: vi.fn().mockResolvedValue({ x: 12, y: 340, width: 378, height: 44 }),
+    });
+    expect(await nativeLocator(client).boundingBox()).toEqual({
+      x: 12,
+      y: 340,
+      width: 378,
+      height: 44,
+    });
+    expect(client.getElementRect).toHaveBeenCalledWith('element-id');
+  });
+
+  test('throws, naming the element, when it never shows', async () => {
+    const client = mockClient({
+      isElementDisplayed: vi.fn().mockResolvedValue(false),
+      getElementRect: vi.fn(),
+    });
+    await expect(webLocator(client).boundingBox({ timeout: 10 })).rejects.toThrow(
+      'Failed to boundingBox: Element "#field" not visible',
+    );
+    expect(client.getElementRect).not.toHaveBeenCalled();
+  });
+});
