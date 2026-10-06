@@ -40,6 +40,12 @@ Above method defaults to an exact match, and this can be overridden by setting t
 const element = await device.getById('signup', { exact: false });
 ```
 
+Pass `editable: true` to restrict the match to text fields, as `getByLabel` does. An id is not always unique to the field: an Android system dialog can give the file-name field and its title the same resource id.
+
+```ts
+await device.getById('android:id/title', { editable: true }).fill('report.pdf');
+```
+
 ### Get an element by accessibility label
 
 You can use the `getByLabel` method to select elements by their accessibility label (`content-desc` on Android, `label` on iOS). React Native's `accessibilityLabel` lands here on both platforms. Neither `getByText` (which reads the `text` attribute on Android) nor `getById` can find an element that only carries a label.
@@ -63,6 +69,22 @@ You can use the `getByXpath` method to select elements by their XPath on the scr
 ```ts
 const element = await device.getByXpath(`//android.widget.Button[@text="Confirm"]`);
 ```
+
+### Get an element by a platform selector
+
+For a match the methods above cannot express, pass the driver's own selector language. The attribute names are the ones `device.getPageSource()` shows.
+
+```ts
+// iOS: an NSPredicate over name, label, value, type, …
+await device.getByIosPredicate('type == "XCUIElementTypeSwitch" AND value == "1"').tap();
+
+// Android: a UiSelector expression
+await device
+  .getByAndroidUiAutomator('new UiSelector().resourceId("android:id/button1").className("android.widget.Button")')
+  .tap();
+```
+
+Each one fails at the first lookup on the other platform, which has no such strategy.
 
 ## How to Take Actions on the Element
 

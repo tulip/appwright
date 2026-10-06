@@ -147,3 +147,12 @@ export function isNoSuchWindowError(error: unknown): boolean {
   const errorString = String(error).toLowerCase();
   return errorString.includes('no such window') || errorString.includes('nosuchwindowerror');
 }
+
+/**
+ * The name to switch to for a context Appium reported. Appium returns plain names unless the
+ * session asked for the full context list, whose entries are objects named by `id` (their `title`
+ * is the page's title).
+ */
+export function contextName(context: string | { id: string }): string {
+  return typeof context === 'string' ? context : context.id;
+}

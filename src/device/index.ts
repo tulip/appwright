@@ -1,4 +1,6 @@
+import { execFile } from 'child_process';
 import path from 'path';
+import { promisify } from 'util';
 import type { Client as WebDriverClient } from 'webdriver';
 import { z } from 'zod';
 
@@ -11,15 +13,24 @@ import { uploadImageToLambdaTest } from '../providers/lambdatest/utils';
 import {
   AppwrightLocator,
   ExtractType,
+  IdOptions,
   LabelOptions,
   NATIVE_CONTEXT,
   OpenUrlOptions,
   Platform,
+  TerminateAppOptions,
   TimeoutOptions,
   WaitForAppToCloseOptions,
   WaitForFileOptions,
 } from '../types';
-import { boxedStep, delay, escapeQuotes, escapeRegExp, longestDeterministicGroup } from '../utils';
+import {
+  boxedStep,
+  contextName,
+  delay,
+  escapeQuotes,
+  escapeRegExp,
+  longestDeterministicGroup,
+} from '../utils';
 import { AppwrightVision, VisionProvider } from '../vision';
 
 /** Providers whose devices are in a cloud: a local build file cannot be installed on them. */
@@ -36,6 +47,23 @@ const IOS_EDITABLE_TYPES = [
   'XCUIElementTypeSecureTextField',
   'XCUIElementTypeTextView',
 ];
+
+const ANDROID_EDITABLE_CLASS = '.classNameMatches(".*EditText")';
+
+const IOS_EDITABLE_FILTER = ` AND type IN {${IOS_EDITABLE_TYPES.map((type) => `"${type}"`).join(
+  ', ',
+)}}`;
+
+/**
+ * Where the drivers report the device a session landed on: UiAutomator2 as `deviceUDID` (the adb
+ * serial), XCUITest as `udid`, overwritten with the device it actually picked.
+ */
+const UDID_CAPABILITIES = ['deviceUDID', 'appium:deviceUDID', 'udid', 'appium:udid'];
+
+/** `simctl terminate`'s complaint about an app that is not running. */
+const SIMCTL_NOT_RUNNING = 'found nothing to terminate';
+
+const execFilePromise = promisify(execFile);
 
 function trimLeadingSlashes(relativePath: string): string {
   return relativePath.replace(/^\/+/, '');
@@ -269,17 +297,19 @@ export class Device {
   /**
    * Locate an element on the screen with accessibility identifier (`resource-id` on Android,
    * `name` on iOS). Defaults to an exact match; set `exact: false` for a substring match.
+   * Pass `editable: true` to restrict the match to text fields, as `getByLabel()` does.
    *
    * **Usage:**
    * ```js
    * const element = await device.getById("signup_button");
+   * await device.getById("android:id/title", { editable: true }).fill("report");
    * ```
    *
    * @param text string to search for
    * @param options
    * @returns
    */
-  getById(text: string, { exact = true }: { exact?: boolean } = {}): AppwrightLocator {
+  getById(text: string, { exact = true, editable = false }: IdOptions = {}): AppwrightLocator {
     const isAndroid = this.getPlatform() == Platform.ANDROID;
     let selector: string;
     if (isAndroid) {
@@ -287,14 +317,21 @@ export class Device {
       selector = exact
         ? `resourceId("${escapeQuotes(text)}")`
         : `resourceIdMatches("${escapeQuotes(`.*${escapeRegExp(text)}.*`)}")`;
+      if (editable) {
+        selector = `new UiSelector().${selector}${ANDROID_EDITABLE_CLASS}`;
+      }
     } else {
       const quoted = escapeQuotes(text);
       selector = exact ? `name == "${quoted}"` : `name CONTAINS "${quoted}"`;
+      if (editable) {
+        selector += IOS_EDITABLE_FILTER;
+      }
     }
+    // No `textToMatch`: the selector already pins the id, and an element's text is not its id, so
+    // filtering on it turned two nodes that share an id into no match at all.
     return this.locator({
       selector,
       findStrategy: isAndroid ? '-android uiautomator' : '-ios predicate string',
-      textToMatch: text,
     });
   }
 
@@ -323,15 +360,13 @@ export class Device {
     const quoted = escapeQuotes(label);
     if (this.getPlatform() == Platform.ANDROID) {
       const method = exact ? 'description' : 'descriptionContains';
-      const className = editable ? '.classNameMatches(".*EditText")' : '';
+      const className = editable ? ANDROID_EDITABLE_CLASS : '';
       return this.locator({
         selector: `new UiSelector().${method}("${quoted}")${className}`,
         findStrategy: '-android uiautomator',
       });
     }
-    const typeFilter = editable
-      ? ` AND type IN {${IOS_EDITABLE_TYPES.map((type) => `"${type}"`).join(', ')}}`
-      : '';
+    const typeFilter = editable ? IOS_EDITABLE_FILTER : '';
     return this.locator({
       selector: `label ${exact ? '==' : 'CONTAINS'} "${quoted}"${typeFilter}`,
       findStrategy: '-ios predicate string',
@@ -351,6 +386,34 @@ export class Device {
    */
   getByXpath(xpath: string): AppwrightLocator {
     return this.locator({ selector: xpath, findStrategy: 'xpath' });
+  }
+
+  /**
+   * [iOS] Locate an element with a raw NSPredicate, for a match `getByLabel()` / `getById()`
+   * cannot express — on `value`, or on a type other than a text field. The attribute names are
+   * the ones XCUITest's page source shows (`name`, `label`, `value`, `type`, …). Fails at the
+   * first lookup on Android, which has no such strategy.
+   *
+   * **Usage:**
+   * ```js
+   * await device.getByIosPredicate('type == "XCUIElementTypeButton" AND label BEGINSWITH "Sign"').tap();
+   * ```
+   */
+  getByIosPredicate(predicate: string): AppwrightLocator {
+    return this.locator({ selector: predicate, findStrategy: '-ios predicate string' });
+  }
+
+  /**
+   * [Android] Locate an element with a raw UiSelector expression, e.g. to combine a resource id
+   * with a class. Fails at the first lookup on iOS, which has no such strategy.
+   *
+   * **Usage:**
+   * ```js
+   * await device.getByAndroidUiAutomator('new UiSelector().resourceId("android:id/button1").className("android.widget.Button")').tap();
+   * ```
+   */
+  getByAndroidUiAutomator(selector: string): AppwrightLocator {
+    return this.locator({ selector, findStrategy: '-android uiautomator' });
   }
 
   /**
@@ -432,8 +495,76 @@ export class Device {
     return this.getPlatform() == Platform.ANDROID ? { appId } : { bundleId: appId };
   }
 
-  private isIosSimulator(): boolean {
+  /**
+   * Whether this is an iOS simulator: the one kind of device whose app containers are host
+   * directories and that `xcrun simctl` can drive. An Android emulator is not a simulator here —
+   * use `getProvider() === 'emulator'` for "not a physical device" on either platform.
+   */
+  isSimulator(): boolean {
     return this.getPlatform() == Platform.IOS && this.provider === IOS_SIMULATOR_PROVIDER;
+  }
+
+  /**
+   * The device this session is driving, as the driver reports it: the adb serial on Android
+   * (`emulator-5554`), the device or simulator UDID on iOS. With several devices configured it
+   * is the one this worker's slot was given, so read it here rather than from an environment
+   * variable or `simctl list`, which cannot tell the workers' devices apart.
+   *
+   * Throws when the session's capabilities carry no udid.
+   */
+  getUdid(): string {
+    const capabilities = (this.webDriverClient.capabilities ?? {}) as Record<string, unknown>;
+    for (const key of UDID_CAPABILITIES) {
+      const udid = capabilities[key];
+      if (typeof udid === 'string' && udid !== '') {
+        return udid;
+      }
+    }
+    throw new Error(
+      `The session reported no udid (looked for ${UDID_CAPABILITIES.join(', ')} in its ` +
+        `capabilities). The '${this.provider}' provider's driver may not expose one.`,
+    );
+  }
+
+  /**
+   * [iOS simulator] The host directory backing a path inside the app under test's data
+   * container, for reading what the app wrote with ordinary `fs` calls rather than through
+   * Appium. The container is named by an install-time UUID, so `xcrun simctl` is asked for it;
+   * a reinstall moves it. `appContainerPath()` with `pullFile()` is the route that works on
+   * every device.
+   */
+  async simulatorContainerPath(relativePath = ''): Promise<string> {
+    this.requireSimulator('simulatorContainerPath()');
+    const appId = this.getAppBundleId();
+    const udid = this.getUdid();
+    let container: string;
+    try {
+      const { stdout } = await execFilePromise('xcrun', [
+        'simctl',
+        'get_app_container',
+        udid,
+        appId,
+        'data',
+      ]);
+      container = stdout.trim();
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `Could not locate the data container of '${appId}' on simulator ${udid}: ${reason}`,
+      );
+    }
+    return path.join(container, trimLeadingSlashes(relativePath));
+  }
+
+  private requireSimulator(what: string): void {
+    if (this.isSimulator()) {
+      return;
+    }
+    const device =
+      this.getPlatform() == Platform.IOS ? `a '${this.provider}' iOS device` : 'an Android device';
+    throw new Error(
+      `${what} needs an iOS simulator, which \`xcrun simctl\` can reach; this is ${device}.`,
+    );
   }
 
   /**
@@ -491,7 +622,7 @@ export class Device {
    */
   @boxedStep
   async clearAppData(appId: string = this.getAppBundleId()): Promise<void> {
-    if (this.getPlatform() == Platform.IOS && !this.isIosSimulator()) {
+    if (this.getPlatform() == Platform.IOS && !this.isSimulator()) {
       throw new Error(
         `Cannot clear the data of '${appId}' on a '${this.provider}' iOS device: only a ` +
           'simulator exposes an app data container. Use reinstallApp() instead.',
@@ -756,24 +887,43 @@ export class Device {
 
   /**
    * @param [bundleId] - Optional bundleId of the app to terminate. If not provided, it will attempt to terminate the app under test.
+   * @param [options] - `force: true` kills the process with `xcrun simctl terminate` on an iOS
+   * simulator, for bundle ids WebDriverAgent cannot terminate (see `TerminateAppOptions`).
    * It changes the context to NATIVE_APP after terminating the app.
    */
   @boxedStep
-  async terminateApp(bundleId?: string) {
+  async terminateApp(bundleId?: string, { force = false }: TerminateAppOptions = {}) {
     let currentBundleId;
     if (!this.bundleId && !bundleId) {
       currentBundleId = await this.getCurrentBundleId();
       if (!currentBundleId) throw new Error('bundleId is required to terminate the app.');
     }
-    const keyName = this.getPlatform() == Platform.ANDROID ? 'appId' : 'bundleId';
-    await this.webDriverClient.executeScript('mobile: terminateApp', [
-      {
-        [keyName]: bundleId || this.bundleId || currentBundleId,
-      },
-    ]);
+    const appId = (bundleId || this.bundleId || currentBundleId)!;
+    if (force && this.getPlatform() == Platform.IOS) {
+      await this.terminateSimulatorProcess(appId);
+    } else {
+      const keyName = this.getPlatform() == Platform.ANDROID ? 'appId' : 'bundleId';
+      await this.webDriverClient.executeScript('mobile: terminateApp', [{ [keyName]: appId }]);
+    }
     // Switch to native context after terminating the app so that if the app is re-launched, webview
     // reads and switches correctly.
     await this.ensureNativeContext();
+  }
+
+  private async terminateSimulatorProcess(appId: string): Promise<void> {
+    this.requireSimulator('terminateApp({ force: true })');
+    const udid = this.getUdid();
+    try {
+      await execFilePromise('xcrun', ['simctl', 'terminate', udid, appId]);
+    } catch (error) {
+      const stderr = String((error as { stderr?: unknown }).stderr ?? '');
+      if (!stderr.includes(SIMCTL_NOT_RUNNING)) {
+        throw new Error(
+          `xcrun simctl terminate ${udid} ${appId} failed: ${stderr.trim() || error}`,
+        );
+      }
+      logger.log(`terminateApp: ${appId} was not running on ${udid}.`);
+    }
   }
 
   /**
@@ -988,12 +1138,11 @@ export class Device {
    * @internal Used internally for automatic context switching
    */
   async getCurrentContext(): Promise<string> {
-    const context = await this.webDriverClient.getAppiumContext();
-    const contextName = typeof context === 'string' ? context : context.title;
-    if (!contextName) {
+    const name = contextName(await this.webDriverClient.getAppiumContext());
+    if (!name) {
       throw new Error('Unable to get current context name.');
     }
-    return contextName;
+    return name;
   }
 
   /**
@@ -1020,11 +1169,53 @@ export class Device {
     return await this.webDriverClient.executeScript(scriptString, []);
   }
 
+  /**
+   * The native view hierarchy as XML — UiAutomator2's dump on Android, XCUITest's on iOS — for
+   * finding the attributes a locator can match on. Read from NATIVE_APP whatever context is
+   * active, then switched back, so a call between two `webView` steps leaves the WebView bound.
+   * For a page's HTML, use `webView.evaluate(() => document.documentElement.outerHTML)`.
+   */
+  async getPageSource(): Promise<string> {
+    const previous = await this.getCurrentContext();
+    if (previous === NATIVE_CONTEXT) {
+      return await this.webDriverClient.getPageSource();
+    }
+    await this.switchToNativeContext();
+    try {
+      return await this.webDriverClient.getPageSource();
+    } finally {
+      try {
+        await this.switchContext(previous);
+      } catch (error) {
+        // The page behind `previous` can be gone by now. That must not cost the caller the source:
+        // the next `webView` call finds a WebView again from NATIVE_APP.
+        logger.warn(
+          `getPageSource: could not switch back to ${previous}, staying in NATIVE_APP: ` +
+            (error instanceof Error ? error.message : String(error)),
+        );
+      }
+    }
+  }
+
   async getWindowHandles(): Promise<string[]> {
     return await this.webDriverClient.getWindowHandles();
   }
 
   async getCurrentWindowHandle(): Promise<string> {
     return await this.webDriverClient.getWindowHandle();
+  }
+
+  /**
+   * Switches to the window `handle` names. In a WEBVIEW context a window is one page: a browser
+   * context such as `WEBVIEW_chrome` spans every open tab, and this picks which one chromedriver
+   * drives. `webView.attach({ pageUrl })` does the search by URL for you.
+   */
+  async switchToWindow(handle: string): Promise<void> {
+    await this.webDriverClient.switchToWindow(handle);
+  }
+
+  /** The URL of the page the current WEBVIEW context is driving. */
+  async getUrl(): Promise<string> {
+    return await this.webDriverClient.getUrl();
   }
 }
