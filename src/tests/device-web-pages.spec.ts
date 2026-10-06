@@ -3,7 +3,7 @@ import { describe, expect, Mock, test, vi } from 'vitest';
 import { Client as WebDriverClient } from 'webdriver';
 
 import { Device } from '../device';
-import { toWebPages } from '../device/web-pages';
+import { devToolsPageId, toWebPages } from '../device/web-pages';
 
 type MockClient = WebDriverClient & Record<string, Mock>;
 
@@ -75,6 +75,13 @@ describe('toWebPages', () => {
     ]);
     expect(toWebPages(true, undefined)).toEqual([]);
   });
+
+  test("devToolsPageId: the id after an Android key's context; none on iOS", () => {
+    const [android] = toWebPages(true, androidContexts({ id: 'A1', url: 'https://x.test/' }));
+    expect(devToolsPageId(android!)).toBe('A1');
+    const [ios] = toWebPages(false, IOS_CONTEXTS);
+    expect(devToolsPageId(ios!)).toBeUndefined();
+  });
 });
 
 describe('webPages / waitForWebPage', () => {
@@ -107,9 +114,29 @@ describe('webPages / waitForWebPage', () => {
     expect(client.executeScript).toHaveBeenCalledTimes(3);
   });
 
-  test('a known page under a new context, as iOS lists a reload, is not new', async () => {
-    const reloaded = [IOS_CONTEXTS[0], { ...IOS_CONTEXTS[1], id: 'WEBVIEW_61028.2' }];
-    const client = mockClient(false, reloaded);
+  test('Android: a rebuilt WebView at a URL among notIn is new, by its key', async () => {
+    const player = { id: 'A1', url: 'https://acme.tulip.co/player' };
+    const client = mockClient(true, androidContexts(player, { id: 'B2', url: player.url }));
+    const rebuilt = await device(client).waitForWebPage({
+      notIn: toWebPages(true, androidContexts(player)),
+      timeout: 0,
+    });
+    expect(rebuilt.key).toBe('WEBVIEW_co.tulip.player#B2');
+  });
+
+  test('iOS: a second tab at a known URL is new, by its key', async () => {
+    const tab = { ...IOS_CONTEXTS[1], id: 'WEBVIEW_61028.2' };
+    const client = mockClient(false, [...IOS_CONTEXTS, tab]);
+    const found = await device(client).waitForWebPage({
+      notIn: toWebPages(false, IOS_CONTEXTS),
+      timeout: 0,
+    });
+    expect(found.key).toBe('WEBVIEW_61028.2');
+  });
+
+  test('a known page that navigated is not new', async () => {
+    const navigated = [IOS_CONTEXTS[0], { ...IOS_CONTEXTS[1], url: 'https://acme.tulip.co/home' }];
+    const client = mockClient(false, navigated);
     await expect(
       device(client).waitForWebPage({ notIn: toWebPages(false, IOS_CONTEXTS), timeout: 0 }),
     ).rejects.toThrow(

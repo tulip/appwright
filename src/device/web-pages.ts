@@ -46,3 +46,12 @@ export function toWebPages(isAndroid: boolean, raw: unknown): WebPage[] {
 export function hasLoadedUrl(page: WebPage): boolean {
   return page.url !== '' && page.url !== 'about:blank';
 }
+
+/**
+ * The DevTools id an Android page's key carries after its context, as `toWebPages()` builds it;
+ * `undefined` for an iOS page, whose context is the page itself.
+ */
+export function devToolsPageId(page: WebPage): string | undefined {
+  const prefix = `${page.context}#`;
+  return page.key.startsWith(prefix) ? page.key.slice(prefix.length) : undefined;
+}

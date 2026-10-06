@@ -196,6 +196,13 @@ export type AttachOptions = {
    * first, such as the new-tab page its first-run screens leave behind.
    */
   pageUrl?: string | RegExp;
+  /**
+   * Bind this page, as `device.webPages()` or `device.waitForWebPage()` returned it, in place of
+   * `context` and `pageUrl`. On Android it picks the page's own window by its DevTools id, which
+   * tells apart two pages at the same URL: a WebView the app rebuilt and the one it replaced.
+   * Chrome numbers its tabs instead, so a Chrome tab is the window at the tab's current URL.
+   */
+  page?: WebPage;
   /** A CSS selector that must be in the page's DOM before the attach counts. */
   probeSelector?: string;
   /** How long to keep trying, in milliseconds. Defaults to 60 000. */
@@ -302,7 +309,7 @@ export type AlertButtonOptions = {
 
 /** One page of one WebView, as `mobile: getContexts` lists it. */
 export type WebPage = {
-  /** The Appium context to bind it with: `webView.attach({ context, pageUrl: url })`. */
+  /** The Appium context the page is in. `webView.attach({ page })` binds the page itself. */
   context: string;
   /**
    * Unique per page: the context on iOS, where each page has its own; the context plus the
@@ -315,9 +322,9 @@ export type WebPage = {
 
 export type WaitForWebPageOptions = {
   /**
-   * Pages that do not count: usually `await device.webPages()` from just before the tap that
-   * opens the new one. A page whose key or URL is among them is not new — iOS lists a page under
-   * a new context when it reloads.
+   * Pages that do not count: usually `await device.webPages()` from just before the step that
+   * opens the new one. A page keeps its key through reloads and navigations, so only the key is
+   * compared: a second tab at a URL among them, or the WebView an app rebuilt there, is new.
    */
   notIn?: WebPage[];
   /** A string the page's URL contains, or a RegExp it matches. */

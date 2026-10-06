@@ -21,12 +21,15 @@ function mockClient({
   foreground = APP,
   pages = { 'CDwindow-1': 'https://example.com/' } as Record<string, string>,
   page = (): PageState => ({ readyState: 'complete', probe: true }),
+  devTools = (): unknown => [],
 }: {
   isAndroid?: boolean;
   contexts?: unknown[] | (() => unknown[]);
   foreground?: string;
   pages?: Record<string, string>;
   page?: () => PageState;
+  /** What `mobile: getContexts` answers. */
+  devTools?: () => unknown;
 } = {}): MockClient {
   let current = 'NATIVE_APP';
   let window = Object.keys(pages)[0];
@@ -46,6 +49,9 @@ function mockClient({
     executeScript: vi.fn(async (script: string) => {
       if (script === 'mobile: getCurrentPackage') {
         return foreground;
+      }
+      if (script === 'mobile: getContexts') {
+        return devTools();
       }
       if (script.includes('readyState')) {
         return page().readyState;
@@ -100,6 +106,120 @@ describe('webView.attach', () => {
     const again = mockClient({ contexts: ['NATIVE_APP', 'WEBVIEW_chrome'], pages });
     await webView(again).attach({ context: 'WEBVIEW_chrome', pageUrl: /sso\.example\.com/g });
     expect(again.switchToWindow).toHaveBeenLastCalledWith('CDwindow-2');
+  });
+
+  describe('page', () => {
+    const PLAYER = 'https://acme.tulip.co/player';
+    const APP_CONTEXT = `WEBVIEW_${APP}`;
+    const REBUILT = { context: APP_CONTEXT, key: `${APP_CONTEXT}#B2`, url: PLAYER, title: '' };
+    /** UiAutomator2's `mobile: getContexts`: one WebView or browser, its DevTools pages nested. */
+    const listing =
+      (webviewName: string, ...pages: { id: string; url: string }[]) =>
+      (): unknown =>
+        [{ webviewName, pages: pages.map((p) => ({ type: 'page', title: '', ...p })) }];
+    const windows = (client: MockClient) =>
+      (client.switchToWindow as Mock).mock.calls.map((c) => c[0]);
+
+    test('WebView: picks its window by DevTools id among pages at the same URL', async () => {
+      const devTools = listing(APP_CONTEXT, { id: 'A1', url: PLAYER }, { id: 'B2', url: PLAYER });
+      const client = mockClient({ pages: { A1: PLAYER, B2: PLAYER }, devTools });
+      expect(await webView(client).attach({ page: REBUILT })).toBe(APP_CONTEXT);
+      expect(switches(client)).toEqual(['NATIVE_APP', APP_CONTEXT]);
+      expect(windows(client)).toEqual(['B2']);
+
+      const older = mockClient({
+        pages: { 'CDwindow-A1': PLAYER, 'CDwindow-B2': PLAYER },
+        devTools,
+      });
+      await webView(older).attach({ page: REBUILT });
+      expect(windows(older)).toEqual(['CDwindow-B2']);
+    });
+
+    test('WebView: keeps trying while chromedriver lists only the other page', async () => {
+      const devTools = listing(APP_CONTEXT, { id: 'A1', url: PLAYER }, { id: 'B2', url: PLAYER });
+      const client = mockClient({ pages: { A1: PLAYER, B2: PLAYER }, devTools });
+      (client.getWindowHandles as Mock).mockResolvedValueOnce(['A1']);
+      vi.useFakeTimers();
+      const attached = webView(client).attach({ page: REBUILT });
+      await vi.runAllTimersAsync();
+      await attached;
+      expect(client.getWindowHandles).toHaveBeenCalledTimes(2);
+      // Never A1, even though it is at the same URL.
+      expect(windows(client)).toEqual(['B2']);
+    });
+
+    test("Chrome: a numbered tab is the window at the tab's current URL", async () => {
+      // The tab redirected since waitForWebPage returned it.
+      const devTools = listing(
+        'WEBVIEW_chrome',
+        { id: '4', url: 'https://example.com/' },
+        { id: '5', url: 'https://sso.example.com/done' },
+      );
+      const client = mockClient({
+        contexts: ['NATIVE_APP', 'WEBVIEW_chrome'],
+        pages: { '9F2C': 'https://example.com/', '0B7E': 'https://sso.example.com/done' },
+        devTools,
+      });
+      const tab = {
+        context: 'WEBVIEW_chrome',
+        key: 'WEBVIEW_chrome#5',
+        url: 'https://sso.example.com/start',
+        title: '',
+      };
+      await webView(client).attach({ page: tab });
+      expect(windows(client).at(-1)).toBe('0B7E');
+    });
+
+    test('Chrome: two tabs at the URL cannot be told apart', async () => {
+      const url = 'https://example.com/';
+      const client = mockClient({
+        contexts: ['NATIVE_APP', 'WEBVIEW_chrome'],
+        pages: { '9F2C': url, '0B7E': url },
+        devTools: listing('WEBVIEW_chrome', { id: '4', url }, { id: '5', url }),
+      });
+      const tab = { context: 'WEBVIEW_chrome', key: 'WEBVIEW_chrome#5', url, title: '' };
+      vi.useFakeTimers();
+      const attached = webView(client)
+        .attach({ page: tab, timeout: 3_000 })
+        .catch((e: Error) => e);
+      await vi.runAllTimersAsync();
+      expect(((await attached) as Error).message).toContain(
+        'Last error: no single window for page WEBVIEW_chrome#5: none is listed under its id, ' +
+          'and 2 are at https://example.com/',
+      );
+    });
+
+    test('times out naming the page once it is no longer listed', async () => {
+      const client = mockClient({ devTools: listing(APP_CONTEXT, { id: 'A1', url: PLAYER }) });
+      vi.useFakeTimers();
+      const attached = webView(client)
+        .attach({ page: REBUILT, timeout: 3_000 })
+        .catch((e: Error) => e);
+      await vi.runAllTimersAsync();
+      const error = (await attached) as Error;
+      expect(error.message).toContain(`could not reach a live page in ${APP_CONTEXT}#B2 within`);
+      expect(error.message).toContain(`Last error: page ${APP_CONTEXT}#B2 is no longer listed`);
+    });
+
+    test('iOS: the context is the page, so no window is picked', async () => {
+      const client = mockClient({ isAndroid: false, contexts: ['NATIVE_APP', 'WEBVIEW_61028.2'] });
+      const page = { context: 'WEBVIEW_61028.2', key: 'WEBVIEW_61028.2', url: PLAYER, title: '' };
+      expect(await webView(client).attach({ page })).toBe('WEBVIEW_61028.2');
+      expect(switches(client)).toEqual(['NATIVE_APP', 'WEBVIEW_61028.2']);
+      expect(client.getWindowHandles).not.toHaveBeenCalled();
+      expect(client.executeScript).not.toHaveBeenCalledWith(
+        'mobile: getContexts',
+        expect.anything(),
+      );
+    });
+
+    test('is not combined with context or pageUrl', async () => {
+      const client = mockClient();
+      await expect(webView(client).attach({ page: REBUILT, pageUrl: '/player' })).rejects.toThrow(
+        'attach: pass `page`, or `context` and `pageUrl`, not both.',
+      );
+      expect(client.switchAppiumContext).not.toHaveBeenCalled();
+    });
   });
 
   test('keeps trying until the page is ready and holds the probe', async () => {
