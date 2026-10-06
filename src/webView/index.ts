@@ -20,7 +20,15 @@ import {
   TextOptions,
 } from '../types';
 import { NonRetryableError } from '../types/errors';
-import { boxedStep, contextName, delay, escapeQuotes, isNoSuchWindowError } from '../utils';
+import {
+  boxedStep,
+  contextName,
+  delay,
+  errorMessage,
+  escapeQuotes,
+  isNoSuchWindowError,
+  urlMatches,
+} from '../utils';
 
 /**
  * Appium names a browser's context after its DevTools socket, not its package, and every Chrome
@@ -54,19 +62,6 @@ const ATTACH_POLL_INTERVAL_MS = 1_000;
 /** How long the WEBVIEW contexts have to stay unchanged for `settle` to count them as settled. */
 const CONTEXTS_SETTLE_WINDOW_MS = 5_000;
 const CONTEXTS_SETTLE_SAMPLE_MS = 1_000;
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function urlMatches(url: string, pageUrl: string | RegExp): boolean {
-  if (typeof pageUrl === 'string') {
-    return url.includes(pageUrl);
-  }
-  // A `g`/`y` RegExp resumes from where its previous test() matched.
-  pageUrl.lastIndex = 0;
-  return pageUrl.test(url);
-}
 
 /**
  * WebView class for interacting with WebView content in hybrid mobile apps.

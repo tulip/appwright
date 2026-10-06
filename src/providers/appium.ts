@@ -506,3 +506,85 @@ export async function getApkDetails(buildPath: string): Promise<{
     throw new Error(`getApkDetails: ${error.message}`);
   }
 }
+
+/** Runs `command` without a shell, feeding `input` to its stdin, and returns stdout. */
+function runCommand(command: string, args: string[], input?: Buffer): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const child = execFile(
+      command,
+      args,
+      { encoding: 'buffer', maxBuffer: 32 * 1024 * 1024 },
+      (error, stdout, stderr) => {
+        if (error) {
+          const detail = stderr.toString().trim() || error.message;
+          reject(new Error(`${command} ${args.join(' ')} failed: ${detail}`));
+        } else {
+          resolve(stdout);
+        }
+      },
+    );
+    child.stdin?.end(input);
+  });
+}
+
+/** The fields of the `package:` line of `aapt dump badging`. */
+export function parseApkBadging(badging: string): {
+  packageName?: string;
+  versionCode?: string;
+  versionName?: string;
+} {
+  const line = /^package: (.*)$/m.exec(badging)?.[1] ?? '';
+  const field = (name: string) => new RegExp(`\\b${name}='([^']*)'`).exec(line)?.[1];
+  return {
+    packageName: field('name'),
+    versionCode: field('versionCode'),
+    versionName: field('versionName'),
+  };
+}
+
+/**
+ * What an `.app`, `.ipa` or `.apk` declares about itself, read on the host: `Info.plist`
+ * through `plutil` (out of the archive with `unzip` for an `.ipa`), or `aapt dump badging` from
+ * the newest build-tools under `ANDROID_HOME`.
+ */
+export async function readBuildInfo(buildPath: string): Promise<{
+  bundleId: string;
+  version: string;
+  buildNumber: string;
+  path: string;
+}> {
+  const absolute = path.resolve(buildPath);
+
+  if (absolute.endsWith('.apk')) {
+    const buildToolsVersion = await getLatestBuildToolsVersion();
+    const aapt = path.join(process.env.ANDROID_HOME!, 'build-tools', buildToolsVersion!, 'aapt');
+    const badging = (await runCommand(aapt, ['dump', 'badging', absolute])).toString();
+    const { packageName, versionCode, versionName } = parseApkBadging(badging);
+    if (!packageName || versionName == null || versionCode == null) {
+      throw new Error(`${absolute} declares no package name, versionName or versionCode.`);
+    }
+    return {
+      bundleId: packageName,
+      version: versionName,
+      buildNumber: versionCode,
+      path: absolute,
+    };
+  }
+
+  let plist: Buffer;
+  if (absolute.endsWith('.app')) {
+    plist = await fs.readFile(path.join(absolute, 'Info.plist'));
+  } else if (absolute.endsWith('.ipa')) {
+    plist = await runCommand('unzip', ['-p', absolute, 'Payload/*.app/Info.plist']);
+  } else {
+    throw new Error(`Cannot read build info from ${absolute}: use an .app, .ipa or .apk.`);
+  }
+  const value = async (key: string) =>
+    (await runCommand('plutil', ['-extract', key, 'raw', '-o', '-', '-'], plist)).toString().trim();
+  return {
+    bundleId: await value('CFBundleIdentifier'),
+    version: await value('CFBundleShortVersionString'),
+    buildNumber: await value('CFBundleVersion'),
+    path: absolute,
+  };
+}
