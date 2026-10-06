@@ -34,9 +34,9 @@ describe('getByLabel', () => {
     );
   });
 
-  test('Android: editable narrows to EditText', () => {
+  test('Android: editable narrows to text fields, autocomplete ones included', () => {
     expect(compiled(device(true).getByLabel('URL', { editable: true })).selector).toBe(
-      'new UiSelector().description("URL").classNameMatches(".*EditText")',
+      'new UiSelector().description("URL").classNameMatches(".*(EditText|AutoCompleteTextView)")',
     );
   });
 
@@ -74,10 +74,10 @@ describe('getById', () => {
 
   test('editable narrows to text fields on both platforms', () => {
     expect(compiled(device(true).getById('android:id/title', { editable: true })).selector).toBe(
-      'new UiSelector().resourceId("android:id/title").classNameMatches(".*EditText")',
+      'new UiSelector().resourceId("android:id/title").classNameMatches(".*(EditText|AutoCompleteTextView)")',
     );
     expect(compiled(device(true).getById('title', { exact: false, editable: true })).selector).toBe(
-      'new UiSelector().resourceIdMatches(".*title.*").classNameMatches(".*EditText")',
+      'new UiSelector().resourceIdMatches(".*title.*").classNameMatches(".*(EditText|AutoCompleteTextView)")',
     );
     expect(
       compiled(device(false).getById('DOCPicker.filenameTextField', { editable: true })),
