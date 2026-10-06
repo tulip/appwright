@@ -191,22 +191,25 @@ attach again to get back to the app's own WebView.
   read natively through `mobile: getContexts` without attaching to any: the app's pages, a
   popup's, and on Android every tab of a browser in front. iOS gives each page its own context;
   Android has one context per WebView or browser, so `key` adds the page's DevTools id.
-- `device.waitForWebPage({ notIn, url, timeout })` — waits for a page that is not among `notIn`
-  to load, and returns it: a `window.open()` popup, an OAuth window, a new tab. A new page reads
-  `about:blank` for about a second first, and does not count until its URL arrives. A page whose
-  key or URL is among `notIn` is not new: iOS lists a page under a new context when it reloads.
+- `device.waitForWebPage({ notIn, url, timeout })` — waits for a page that is not among `notIn` to
+  load, and returns it: a `window.open()` popup, an OAuth window, a new tab, the WebView an app
+  rebuilt. A new page reads `about:blank` for about a second first, and does not count until its URL
+  arrives. Pages are compared by key alone: both platforms keep a page's key through reloads and
+  navigations, so a page under a new key is new even at a URL `notIn` has.
 
 ```ts
 const before = await device.webPages();
 await webView.getByRole('link', { name: 'Open PDF' }).tap();
 const popup = await device.waitForWebPage({ notIn: before, url: '.pdf' });
-await webView.attach({ context: popup.context, pageUrl: popup.url });
+await webView.attach({ page: popup });
 ```
 
-Bind the page with `attach()`: plain discovery binds the first WebView it finds, which on iOS is
-the page the popup opened from. Every `device` call that is native leaves the session in
-`NATIVE_APP`, after which the next `webView` call discovers again — attach again after native
-steps when the page is not the one discovery finds.
+Bind the page with `attach({ page })`: plain discovery binds the first WebView it finds, which on
+iOS is the page the popup opened from, and `pageUrl` cannot tell apart two pages at one URL. On
+Android `page` picks the page's window by its DevTools id; Chrome numbers its tabs instead, so there
+the tab is the window at its current URL. Every `device` call that is native leaves the session in
+`NATIVE_APP`, after which the next `webView` call discovers again — attach again after native steps
+when the page is not the one discovery finds.
 
 ## Alerts
 

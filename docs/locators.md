@@ -179,6 +179,12 @@ await device.getByText('Loading…').waitFor('hidden');
 
 `expect(locator).not.toBeVisible()` uses the same wait, so it returns as soon as the element is gone rather than after the full timeout.
 
+These waits, and every action that waits for its element, take `{ timeout }` in milliseconds and default to the project's `expectTimeout`. `{ timeout: 0 }` makes a single attempt, for a quick check that something is not there; Playwright reads `0` as no timeout instead.
+
+```ts
+const hasSecondPage = await webView.getByText('Page 2').isVisible({ timeout: 0 });
+```
+
 ## Scroll screen
 
 To scroll the screen, you can use the `scroll` method.
@@ -312,16 +318,20 @@ await webView.attach({ probeSelector: '[data-testid="login-badgeid"]' });
 
 // A Chrome Custom Tab is in front: drive the sign-in page in it.
 await webView.attach({ context: 'WEBVIEW_chrome', pageUrl: '/oauth2/authorize' });
+
+// The page a step opened, as device.waitForWebPage() returned it.
+await webView.attach({ page: popup });
 ```
 
 | Option          | Default  | What it does                                                                                                                                                                                      |
 | --------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `context`       | —        | Bind this context by name. Without it, the WebView of the app in the foreground is bound; with Chrome in front, that is Chrome's `WEBVIEW_chrome`.                                                |
 | `pageUrl`       | —        | A string the page URL contains, or a RegExp it matches. A browser context spans every open tab, and chromedriver otherwise lands on whichever Chrome lists first.                                 |
+| `page`          | —        | A page from `device.webPages()` or `waitForWebPage()`, in place of `context` and `pageUrl`. Android picks its window by DevTools id, but Chrome numbers tabs: there, the window at the tab's URL. |
 | `probeSelector` | —        | A CSS selector that must be in the DOM.                                                                                                                                                           |
 | `timeout`       | `60_000` | How long to keep trying, in milliseconds.                                                                                                                                                         |
 | `settle`        | `false`  | First wait until the set of WEBVIEW contexts has not changed for 5 s. On iOS a relaunch replaces `WEBVIEW_<pid>.1` with `.2`, and a script sent to the outgoing page holds the session for 120 s. |
 
-`device.getWindowHandles()`, `device.switchToWindow(handle)` and `device.getUrl()` are the window commands `pageUrl` is built on, for picking a tab by other means.
+`device.getWindowHandles()`, `device.switchToWindow(handle)` and `device.getUrl()` are the window commands `pageUrl` and `page` are built on, for picking a tab by other means.
 
-**Note:** Currently supports apps with a single WebView only.
+**Note:** Discovery binds a single WebView. To drive another, attach to it with `context` and `pageUrl`, or with `page`.
