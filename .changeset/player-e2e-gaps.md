@@ -33,7 +33,13 @@ platforms.
 **App and pages.** `getAppState()` (an exported `AppState`) and `getBuildInfo()` (bundle id, version
 and build number read off the project's build) need no host-side parsing in the suite.
 `webPages()` lists every WebView page the session can see, and `waitForWebPage({ notIn, url })`
-waits for a new one — a popup, an OAuth window, a new tab — to load, for `webView.attach()` to bind.
+waits for a new one — a popup, an OAuth window, a new tab, the WebView an app rebuilt — to load.
+`webView.attach({ page })` binds that very page: on Android by its DevTools id, which tells apart two
+pages at one URL, and in Chrome, which numbers its tabs instead, by the tab's current URL.
+
+**Locators.** An action (`tap()`, `fill()`, `getText()`, `boundingBox()`, …) acts on the element its
+visibility wait found instead of looking it up once more; on iOS every XPath lookup is a
+page-source snapshot.
 
 **Package.** `request` and the types `APIRequest`, `APIRequestContext`, `APIResponse` and
 `TestInfo` are re-exported from `@playwright/test`. The CLI runs Playwright and Appium from
@@ -47,6 +53,9 @@ appwright's own dependencies rather than `npx`, so their bins need not be hoiste
   expression (before, its source was searched for as a literal substring). Matching stays
   case-sensitive. Its step titles and errors read `getByText("x")` instead of an XPath. A test that
   relied on the old match can spell it out: `webView.getByXpath('//*[contains(., "x")]')`.
+- `{ timeout: 0 }` on a locator wait or action (`isVisible()`, `waitFor()`,
+  `expect(…).toBeVisible()`, `tap()`, …) makes a single attempt. It used to fall back to the
+  project's `expectTimeout`. Playwright reads `0` as no timeout instead.
 - `@empiricalrun/llm` is an optional peer dependency, loaded only by `device.beta.query()` and
   `device.beta.tap()`. Projects that use them must add it with
   `npm install --save-dev @empiricalrun/llm`. `beta.query()`'s `model` option is typed as a

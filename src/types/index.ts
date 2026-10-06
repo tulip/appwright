@@ -11,6 +11,10 @@ export type ExtractType<T> = T extends z.ZodType ? z.infer<T> : never;
 export type VisionModel = string;
 
 export type ActionOptions = {
+  /**
+   * How long to wait for the element, in milliseconds. Defaults to the project's
+   * `expectTimeout`; `0` makes a single attempt.
+   */
   timeout: number;
 };
 
