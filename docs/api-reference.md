@@ -20,7 +20,9 @@ The `webView` fixture provides methods for interacting with WebView content in h
 ### Available Locators
 
 - `webView.getByTestId(testId)` - Select by data-testid attribute (recommended for WebView elements)
-- `webView.getByText(text, options?)` - Select by visible text content
+- `webView.getByText(text, options?)` - Select by text content, as Playwright does
+- `webView.getByRole(role, options?)` - Select by ARIA role and accessible name
+- `webView.getByLabel(label, options?)` - Select by `aria-label`
 - `webView.css(selector)` - Select by CSS selector
 - `webView.getByXpath(xpath)` - Select by XPath expression
 - `webView.getByPlaceholder(text)` - Select input by placeholder text

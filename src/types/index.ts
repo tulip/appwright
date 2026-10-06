@@ -39,6 +39,116 @@ export type LabelOptions = {
   editable?: boolean;
 };
 
+export type TextOptions = {
+  /**
+   * Match the whole text instead of a substring. Defaults to `false`. Either way the match is
+   * case-sensitive — pass a `RegExp` with the `i` flag for a case-insensitive one — and in a
+   * WebView the text is whitespace-normalised first.
+   */
+  exact?: boolean;
+};
+
+/** The ARIA roles `getByRole()` accepts, as in Playwright. */
+export type AriaRole =
+  | 'alert'
+  | 'alertdialog'
+  | 'application'
+  | 'article'
+  | 'banner'
+  | 'blockquote'
+  | 'button'
+  | 'caption'
+  | 'cell'
+  | 'checkbox'
+  | 'code'
+  | 'columnheader'
+  | 'combobox'
+  | 'complementary'
+  | 'contentinfo'
+  | 'definition'
+  | 'deletion'
+  | 'dialog'
+  | 'directory'
+  | 'document'
+  | 'emphasis'
+  | 'feed'
+  | 'figure'
+  | 'form'
+  | 'generic'
+  | 'grid'
+  | 'gridcell'
+  | 'group'
+  | 'heading'
+  | 'img'
+  | 'insertion'
+  | 'link'
+  | 'list'
+  | 'listbox'
+  | 'listitem'
+  | 'log'
+  | 'main'
+  | 'marquee'
+  | 'math'
+  | 'meter'
+  | 'menu'
+  | 'menubar'
+  | 'menuitem'
+  | 'menuitemcheckbox'
+  | 'menuitemradio'
+  | 'navigation'
+  | 'none'
+  | 'note'
+  | 'option'
+  | 'paragraph'
+  | 'presentation'
+  | 'progressbar'
+  | 'radio'
+  | 'radiogroup'
+  | 'region'
+  | 'row'
+  | 'rowgroup'
+  | 'rowheader'
+  | 'scrollbar'
+  | 'search'
+  | 'searchbox'
+  | 'separator'
+  | 'slider'
+  | 'spinbutton'
+  | 'status'
+  | 'strong'
+  | 'subscript'
+  | 'superscript'
+  | 'switch'
+  | 'tab'
+  | 'table'
+  | 'tablist'
+  | 'tabpanel'
+  | 'term'
+  | 'textbox'
+  | 'time'
+  | 'timer'
+  | 'toolbar'
+  | 'tooltip'
+  | 'tree'
+  | 'treegrid'
+  | 'treeitem';
+
+export type RoleOptions = {
+  /**
+   * The accessible name, from the first of: `aria-labelledby`, `aria-label`, an associated
+   * `<label>`, `alt` / an input button's `value`, the text content (for roles named by their
+   * content: buttons, links, headings, menu items, tabs, cells…), `title`, `placeholder`.
+   */
+  name?: string | RegExp;
+  /**
+   * Match `name` whole — the default, as for `getByLabel()` — or as a substring with `false`.
+   * Case-sensitive either way, after whitespace normalisation; ignored for a `RegExp`.
+   */
+  exact?: boolean;
+  /** The heading level: `<h2>` is 2, as is a `role="heading"` without `aria-level`. */
+  level?: number;
+};
+
 export type IdOptions = {
   /** Defaults to `true`. Set it to `false` to match a substring of the id. */
   exact?: boolean;
@@ -492,6 +602,46 @@ export interface AppwrightLocator {
    * locator does not wrap.
    */
   getElement(): Promise<ElementReference | null>;
+
+  /**
+   * Locates an element by its text inside this one, with the semantics of the `getByText()` this
+   * locator's family uses: `webView.getByText()` for a WebView locator, `device.getByText()` for
+   * a native one.
+   *
+   * A chained locator looks inside the element this locator resolves to — the one `tap()` would
+   * act on — and, when that has no match, inside this locator's other matches.
+   *
+   * **Usage:**
+   * ```js
+   * await webView.getByRole("menu").getByText("Device", { exact: true }).waitFor("visible");
+   * await device.getById("print-dialog").getByText("Save").tap();
+   * ```
+   */
+  getByText(text: string | RegExp, options?: TextOptions): AppwrightLocator;
+
+  /**
+   * [WebView] Locates an element by ARIA role inside this one; see `webView.getByRole()`.
+   * Throws on a native locator: native views have no ARIA roles.
+   *
+   * **Usage:**
+   * ```js
+   * await webView.getByTestId("player-menu").getByRole("button", { name: "Settings" }).tap();
+   * ```
+   */
+  getByRole(role: AriaRole, options?: RoleOptions): AppwrightLocator;
+
+  /**
+   * Locates an element by accessibility label inside this one: `aria-label` in a WebView,
+   * `content-desc` / `label` natively, as `getByLabel()` does.
+   */
+  getByLabel(label: string, options?: LabelOptions): AppwrightLocator;
+
+  /**
+   * Locates an element by test id inside this one: `data-testid` in a WebView; natively the
+   * accessibility identifier `device.getById()` matches (`resource-id` / `name`), where React
+   * Native's `testID` lands.
+   */
+  getByTestId(testId: string): AppwrightLocator;
 }
 
 export enum WebDriverErrors {

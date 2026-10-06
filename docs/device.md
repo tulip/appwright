@@ -32,11 +32,12 @@ On a simulator, the host side is reachable directly:
 - `device.simulatorContainerPath(relativePath?)` — the host directory behind a path in the app's
   data container, for reading what the app wrote with ordinary `fs` calls. The container is
   named by an install-time UUID, so it is asked of `simctl` each time; a reinstall moves it.
-- `device.terminateApp(appId, { force: true })` — kills the process with `xcrun simctl
-  terminate` instead of asking WebDriverAgent, which reaches bundle ids XCUITest does not treat
-  as apps (`com.apple.SafariViewService`, which hosts an `ASWebAuthenticationSession`). Not an
-  error when nothing by that id is running. On Android `force` changes nothing — the driver's
-  terminate is already a force-stop — and a physical iOS device throws.
+- `device.terminateApp(appId, { force: true })` — kills the process with
+  `xcrun simctl terminate` instead of asking WebDriverAgent, which reaches bundle ids XCUITest
+  does not treat as apps (`com.apple.SafariViewService`, which hosts an
+  `ASWebAuthenticationSession`). Not an error when nothing by that id is running. On Android
+  `force` changes nothing — the driver's terminate is already a force-stop — and a physical iOS
+  device throws.
 
 Both throw on anything but a simulator. `appContainerPath()` with `pullFile()` (below) is the
 route that works on every device.

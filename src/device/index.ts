@@ -6,7 +6,8 @@ import { z } from 'zod';
 
 import { LLMModel } from '@empiricalrun/llm';
 
-import { Locator } from '../locator';
+import { CHAIN_METHODS, Locator } from '../locator';
+import { LocatorQuery, nativeIdQuery, nativeLabelQuery, nativeTextQuery } from '../locator/queries';
 import { logger } from '../logger';
 import { uploadImageToBS } from '../providers/browserstack/utils';
 import { uploadImageToLambdaTest } from '../providers/lambdatest/utils';
@@ -19,18 +20,12 @@ import {
   OpenUrlOptions,
   Platform,
   TerminateAppOptions,
+  TextOptions,
   TimeoutOptions,
   WaitForAppToCloseOptions,
   WaitForFileOptions,
 } from '../types';
-import {
-  boxedStep,
-  contextName,
-  delay,
-  escapeQuotes,
-  escapeRegExp,
-  longestDeterministicGroup,
-} from '../utils';
+import { boxedStep, contextName, delay } from '../utils';
 import { AppwrightVision, VisionProvider } from '../vision';
 
 /** Providers whose devices are in a cloud: a local build file cannot be installed on them. */
@@ -41,18 +36,6 @@ const IOS_SIMULATOR_PROVIDER = 'emulator';
 
 /** Public, so a pull from here needs no `run-as`. */
 const ANDROID_DOWNLOADS_DIR = '/sdcard/Download';
-
-const IOS_EDITABLE_TYPES = [
-  'XCUIElementTypeTextField',
-  'XCUIElementTypeSecureTextField',
-  'XCUIElementTypeTextView',
-];
-
-const ANDROID_EDITABLE_CLASS = '.classNameMatches(".*EditText")';
-
-const IOS_EDITABLE_FILTER = ` AND type IN {${IOS_EDITABLE_TYPES.map((type) => `"${type}"`).join(
-  ', ',
-)}}`;
 
 /**
  * Where the drivers report the device a session landed on: UiAutomator2 as `deviceUDID` (the adb
@@ -89,14 +72,15 @@ export class Device {
     selector,
     findStrategy,
     textToMatch,
+    description,
     web = false,
-  }: {
-    selector: string;
-    findStrategy: string;
-    textToMatch?: string | RegExp;
+    wrap,
+  }: LocatorQuery & {
     /** Set by `WebView`: the locator resolves in a WEBVIEW context and edits through the DOM. */
     web?: boolean;
-  }): AppwrightLocator {
+    /** Wraps the locators chained off this one, as the caller wraps this one. */
+    wrap?: (locator: Locator) => AppwrightLocator;
+  }): Locator {
     return new Locator(
       this.webDriverClient,
       this.timeoutOpts,
@@ -104,6 +88,7 @@ export class Device {
       findStrategy,
       textToMatch,
       web,
+      { description, wrap },
     );
   }
 
@@ -128,6 +113,11 @@ export class Device {
       get(target, prop) {
         const original = target[prop as keyof AppwrightLocator];
 
+        // `getByText()` and friends only build a locator; the child comes back wrapped.
+        if (CHAIN_METHODS.has(prop)) {
+          return (original as Function).bind(target);
+        }
+
         // Wrap all async methods (actions that interact with elements)
         if (typeof original === 'function' && prop !== 'constructor') {
           return async function (...args: any[]) {
@@ -141,21 +131,19 @@ export class Device {
     });
   }
 
-  locator({
-    selector,
-    findStrategy,
-    textToMatch,
-  }: {
-    selector: string;
-    findStrategy: string;
-    textToMatch?: string | RegExp;
-  }): AppwrightLocator {
+  locator({ selector, findStrategy, textToMatch, description }: LocatorQuery): AppwrightLocator {
     const originalLocator = this.createLocator({
       selector,
       findStrategy,
       textToMatch,
+      description,
+      wrap: (child) => this.wrapWithNativeContext(child),
     });
     return this.wrapWithNativeContext(originalLocator);
+  }
+
+  private isAndroid(): boolean {
+    return this.getPlatform() == Platform.ANDROID;
   }
 
   private vision(): AppwrightVision {
@@ -259,39 +247,8 @@ export class Device {
    * @param options
    * @returns
    */
-  getByText(text: string | RegExp, { exact = false }: { exact?: boolean } = {}): AppwrightLocator {
-    const isAndroid = this.getPlatform() == Platform.ANDROID;
-    if (text instanceof RegExp) {
-      const substringForContains = longestDeterministicGroup(text);
-      if (!substringForContains) {
-        return this.locator({
-          selector: '//*',
-          findStrategy: 'xpath',
-          textToMatch: text,
-        });
-      } else {
-        const selector = isAndroid
-          ? `textContains("${substringForContains}")`
-          : `label CONTAINS "${substringForContains}"`;
-        return this.locator({
-          selector: selector,
-          findStrategy: isAndroid ? '-android uiautomator' : '-ios predicate string',
-          textToMatch: text,
-        });
-      }
-    }
-    const quoted = escapeQuotes(text);
-    let selector: string;
-    if (isAndroid) {
-      selector = exact ? `text("${quoted}")` : `textContains("${quoted}")`;
-    } else {
-      selector = exact ? `label == "${quoted}"` : `label CONTAINS "${quoted}"`;
-    }
-    return this.locator({
-      selector,
-      findStrategy: isAndroid ? '-android uiautomator' : '-ios predicate string',
-      textToMatch: text,
-    });
+  getByText(text: string | RegExp, options: TextOptions = {}): AppwrightLocator {
+    return this.locator(nativeTextQuery(this.isAndroid(), text, options));
   }
 
   /**
@@ -309,30 +266,8 @@ export class Device {
    * @param options
    * @returns
    */
-  getById(text: string, { exact = true, editable = false }: IdOptions = {}): AppwrightLocator {
-    const isAndroid = this.getPlatform() == Platform.ANDROID;
-    let selector: string;
-    if (isAndroid) {
-      // `resourceIdMatches` takes a regular expression, so the id is escaped to match literally.
-      selector = exact
-        ? `resourceId("${escapeQuotes(text)}")`
-        : `resourceIdMatches("${escapeQuotes(`.*${escapeRegExp(text)}.*`)}")`;
-      if (editable) {
-        selector = `new UiSelector().${selector}${ANDROID_EDITABLE_CLASS}`;
-      }
-    } else {
-      const quoted = escapeQuotes(text);
-      selector = exact ? `name == "${quoted}"` : `name CONTAINS "${quoted}"`;
-      if (editable) {
-        selector += IOS_EDITABLE_FILTER;
-      }
-    }
-    // No `textToMatch`: the selector already pins the id, and an element's text is not its id, so
-    // filtering on it turned two nodes that share an id into no match at all.
-    return this.locator({
-      selector,
-      findStrategy: isAndroid ? '-android uiautomator' : '-ios predicate string',
-    });
+  getById(text: string, options: IdOptions = {}): AppwrightLocator {
+    return this.locator(nativeIdQuery(this.isAndroid(), text, options));
   }
 
   /**
@@ -353,24 +288,8 @@ export class Device {
    * await expect(device.getByLabel("Settings")).toBeVisible();
    * ```
    */
-  getByLabel(
-    label: string,
-    { exact = true, editable = false }: LabelOptions = {},
-  ): AppwrightLocator {
-    const quoted = escapeQuotes(label);
-    if (this.getPlatform() == Platform.ANDROID) {
-      const method = exact ? 'description' : 'descriptionContains';
-      const className = editable ? ANDROID_EDITABLE_CLASS : '';
-      return this.locator({
-        selector: `new UiSelector().${method}("${quoted}")${className}`,
-        findStrategy: '-android uiautomator',
-      });
-    }
-    const typeFilter = editable ? IOS_EDITABLE_FILTER : '';
-    return this.locator({
-      selector: `label ${exact ? '==' : 'CONTAINS'} "${quoted}"${typeFilter}`,
-      findStrategy: '-ios predicate string',
-    });
+  getByLabel(label: string, options: LabelOptions = {}): AppwrightLocator {
+    return this.locator(nativeLabelQuery(this.isAndroid(), label, options));
   }
 
   /**

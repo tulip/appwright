@@ -51,6 +51,7 @@
     "@types/fluent-ffmpeg": "^2.1.28",
     "@types/node": "^25.1.0",
     "eslint": "9.39.2",
+    "happy-dom": "^20.14.5",
     "typedoc": "0.28.16",
     "vitest": "^4.0.18"
   }

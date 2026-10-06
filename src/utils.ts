@@ -38,11 +38,16 @@ function isInsideTest(): boolean {
 export function boxedStep(target: Function, context: ClassMethodDecoratorContext) {
   return function replacementMethod(
     this: {
-      selector: string | RegExp;
+      selector?: string | RegExp;
+      description?: string;
     },
     ...args: any
   ) {
-    const path = this.selector ? `("${this.selector}")` : '';
+    const path = this.description
+      ? `(${this.description})`
+      : this.selector
+      ? `("${this.selector}")`
+      : '';
     const argsString = formatStepArgs(Array.from(args));
     const name = `${context.name as string}${path}${argsString}`;
     if (!isInsideTest()) {

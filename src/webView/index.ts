@@ -1,17 +1,24 @@
 import retry from 'async-retry';
 
 import { Device } from '../device';
+import { CHAIN_METHODS, Locator } from '../locator';
+import {
+  LocatorQuery,
+  webLabelQuery,
+  webRoleQuery,
+  webTestIdQuery,
+  webTextQuery,
+} from '../locator/queries';
 import {
   AppwrightLocator,
+  AriaRole,
   LabelOptions,
   Platform,
+  RoleOptions,
+  TextOptions,
 } from '../types';
 import { NonRetryableError } from '../types/errors';
-import {
-  boxedStep,
-  escapeQuotes,
-  isNoSuchWindowError,
-} from '../utils';
+import { boxedStep, escapeQuotes, isNoSuchWindowError } from '../utils';
 
 /**
  * WebView class for interacting with WebView content in hybrid mobile apps.
@@ -97,20 +104,14 @@ export class WebView {
     );
   }
 
-  locator({
-    selector,
-    findStrategy,
-    textToMatch,
-  }: {
-    selector: string;
-    findStrategy: string;
-    textToMatch?: string | RegExp;
-  }): AppwrightLocator {
+  locator({ selector, findStrategy, textToMatch, description }: LocatorQuery): AppwrightLocator {
     const originalLocator = this.device.createLocator({
       selector,
       findStrategy,
       textToMatch,
+      description,
       web: true,
+      wrap: (child) => this.wrapWithContextSwitch(child),
     });
     // Wrap all locator methods to ensure webview context
     return this.wrapWithContextSwitch(originalLocator);
@@ -129,18 +130,23 @@ export class WebView {
    * @param options - `exact` (default `true`); `editable` is ignored in a WebView
    * @returns AppwrightLocator
    */
-  getByLabel(label: string, { exact = true }: LabelOptions = {}): AppwrightLocator {
-    return this.css(`[aria-label${exact ? '' : '*'}="${escapeQuotes(label)}"]`);
+  getByLabel(label: string, options: LabelOptions = {}): AppwrightLocator {
+    return this.locator(webLabelQuery(label, options));
   }
 
   /**
    * Wraps a locator to automatically switch to webview context before any action
    */
-  private wrapWithContextSwitch(locator: AppwrightLocator): AppwrightLocator {
+  private wrapWithContextSwitch(locator: Locator): AppwrightLocator {
     const self = this;
     return new Proxy(locator, {
       get(target, prop) {
         const original = target[prop as keyof AppwrightLocator];
+
+        // `getByText()` and friends only build a locator; the child comes back wrapped.
+        if (CHAIN_METHODS.has(prop)) {
+          return (original as Function).bind(target);
+        }
 
         // Wrap all async methods (actions that interact with elements)
         if (typeof original === 'function' && prop !== 'constructor') {
@@ -179,51 +185,61 @@ export class WebView {
    * @returns AppwrightLocator
    */
   getByTestId(testId: string): AppwrightLocator {
-    return this.locator({
-      selector: `[data-testid="${testId}"]`,
-      findStrategy: 'css selector',
-    });
+    return this.locator(webTestIdQuery(testId));
   }
 
   /**
-   * Locate an element by its visible text content.
+   * Locate an element by its text, the way Playwright's `getByText()` does: the element whose
+   * whitespace-normalised text matches while none of its children's does. `<li><b>Device</b></li>`
+   * yields the `<b>`, not the `<li>` and every ancestor up to `<body>`. Text in `<script>`,
+   * `<style>` and `<head>` (the page title) never matches; an `<input type="submit">` matches by
+   * its value.
+   *
+   * Defaults to a substring match; `exact: true` compares the whole text. Unlike Playwright, the
+   * match is case-sensitive, as `device.getByText()` is; a `RegExp` is tested against the
+   * normalised text, so `/^save$/i` covers the rest.
    *
    * **Usage:**
    * ```js
-   * // Tap a button with exact text
+   * // Whole text, whitespace-normalised
    * await webView.getByText('Submit', { exact: true }).tap();
    *
-   * // Partial text match (default)
+   * // Substring (default)
    * await webView.getByText('Welcome').tap();
    *
-   * // Using RegExp
-   * await expect(webView.getByText(/User \d+/)).toBeVisible();
+   * // RegExp
+   * await expect(webView.getByText(/^User \d+$/)).toBeVisible();
    * ```
    *
-   * @param text - String or RegExp to match against element text
-   * @param options - Options for matching
+   * @param text - String or RegExp to match against the element's text
+   * @param options - `exact` (default `false`)
    * @returns AppwrightLocator
    */
-  getByText(text: string | RegExp, { exact = false }: { exact?: boolean } = {}): AppwrightLocator {
-    if (text instanceof RegExp) {
-      return this.locator({
-        selector: `//*[contains(., "${text.source}")]`,
-        findStrategy: 'xpath',
-        textToMatch: text,
-      });
-    }
+  getByText(text: string | RegExp, options: TextOptions = {}): AppwrightLocator {
+    return this.locator(webTextQuery(text, options));
+  }
 
-    if (exact) {
-      return this.locator({
-        selector: `//*[.="${text}"]`,
-        findStrategy: 'xpath',
-      });
-    }
-
-    return this.locator({
-      selector: `//*[contains(., "${text}")]`,
-      findStrategy: 'xpath',
-    });
+  /**
+   * Locate an element by its ARIA role and accessible name, the way Playwright's `getByRole()`
+   * does. The role is the element's `role` attribute or its implicit HTML one — `<button>` and
+   * `<input type="submit">` are buttons, `<h1>`–`<h6>` headings, `<a href>` a link,
+   * `<input type="checkbox">` a checkbox, and so on; `menu` and `menuitem` come from `role`
+   * alone. Elements hidden from assistive technology (`aria-hidden="true"`, `display: none`,
+   * `visibility: hidden`) are skipped.
+   *
+   * `name` is the accessible name (see `RoleOptions.name`): an icon button's `aria-label`, a
+   * button's or heading's text. Matched whole by default — `exact: false` for a substring —
+   * case-sensitive, after whitespace normalisation.
+   *
+   * **Usage:**
+   * ```js
+   * await webView.getByRole('button', { name: 'Menu' }).tap();
+   * await expect(webView.getByRole('heading', { name: 'Device Settings', level: 2 })).toBeVisible();
+   * await webView.getByRole('menu').getByRole('button', { name: 'Settings' }).tap();
+   * ```
+   */
+  getByRole(role: AriaRole, options: RoleOptions = {}): AppwrightLocator {
+    return this.locator(webRoleQuery(role, options));
   }
 
   /**
@@ -289,7 +305,7 @@ export class WebView {
    */
   getByPlaceholder(text: string): AppwrightLocator {
     return this.locator({
-      selector: `[placeholder="${text}"]`,
+      selector: `[placeholder="${escapeQuotes(text)}"]`,
       findStrategy: 'css selector',
     });
   }
