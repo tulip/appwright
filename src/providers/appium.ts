@@ -28,6 +28,14 @@ export class AppiumPortInUseError extends Error {
   }
 }
 
+/**
+ * Appium's CLI from appwright's own dependencies, run with this Node. `npx appium` finds it only
+ * when the consumer's install happens to hoist Appium's bin into its own node_modules/.bin.
+ */
+function appiumCommand(args: string[]): { command: string; args: string[] } {
+  return { command: process.execPath, args: [require.resolve('appium'), ...args] };
+}
+
 /** The Appium server spawned by this process, killed by the single `process.on('exit')` guard. */
 let trackedAppiumProcess: ChildProcess | undefined;
 let exitGuardRegistered = false;
@@ -105,13 +113,14 @@ export async function startAppiumServer(port: number): Promise<ChildProcess> {
   return new Promise<ChildProcess>((resolve, reject) => {
     let settled = false;
     // https://github.com/appium/appium-uiautomator2-driver?tab=readme-ov-file#automatic-discovery-of-compatible-chromedriver
-    const appiumProcess = spawn(
-      'npx',
-      ['appium', '--port', String(port), '--allow-insecure=uiautomator2:chromedriver_autodownload'],
-      {
-        stdio: 'pipe',
-      },
-    );
+    const { command, args } = appiumCommand([
+      '--port',
+      String(port),
+      '--allow-insecure=uiautomator2:chromedriver_autodownload',
+    ]);
+    const appiumProcess = spawn(command, args, {
+      stdio: 'pipe',
+    });
     trackedAppiumProcess = appiumProcess;
     registerExitGuard();
 
@@ -274,13 +283,8 @@ function extractJsonObject(raw: string): Record<string, unknown> {
 export async function ensureDriverInstalled(driver: 'uiautomator2' | 'xcuitest'): Promise<void> {
   let installed: Record<string, unknown> = {};
   try {
-    const { stdout } = await execFilePromise('npx', [
-      'appium',
-      'driver',
-      'list',
-      '--installed',
-      '--json',
-    ]);
+    const { command, args } = appiumCommand(['driver', 'list', '--installed', '--json']);
+    const { stdout } = await execFilePromise(command, args);
     installed = extractJsonObject(stdout);
   } catch (error: any) {
     logger.warn(
@@ -293,7 +297,8 @@ export async function ensureDriverInstalled(driver: 'uiautomator2' | 'xcuitest')
   }
   logger.log(`Installing Appium driver "${driver}"...`);
   await new Promise<void>((resolve, reject) => {
-    const installProcess = spawn('npx', ['appium', 'driver', 'install', driver], {
+    const { command, args } = appiumCommand(['driver', 'install', driver]);
+    const installProcess = spawn(command, args, {
       stdio: 'pipe',
     });
     installProcess.stdout?.on('data', (data: Buffer) => {
