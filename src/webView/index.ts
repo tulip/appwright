@@ -1,6 +1,7 @@
 import retry from 'async-retry';
 
 import { Device } from '../device';
+import { devToolsPageId } from '../device/web-pages';
 import { CHAIN_METHODS, Locator } from '../locator';
 import {
   LocatorQuery,
@@ -18,6 +19,7 @@ import {
   Platform,
   RoleOptions,
   TextOptions,
+  WebPage,
 } from '../types';
 import { NonRetryableError } from '../types/errors';
 import {
@@ -110,16 +112,23 @@ export class WebView {
    *
    * // Drive the sign-in page a Chrome Custom Tab is showing.
    * await webView.attach({ context: 'WEBVIEW_chrome', pageUrl: '/oauth2/authorize' });
+   *
+   * // Bind the page a step opened, even at the URL of one that was already there.
+   * await webView.attach({ page: await device.waitForWebPage({ notIn: before }) });
    * ```
    */
   @boxedStep
   async attach({
     context,
     pageUrl,
+    page,
     probeSelector,
     timeout = ATTACH_TIMEOUT_MS,
     settle = false,
   }: AttachOptions = {}): Promise<string> {
+    if (page != null && (context != null || pageUrl != null)) {
+      throw new Error('attach: pass `page`, or `context` and `pageUrl`, not both.');
+    }
     const deadline = Date.now() + timeout;
     if (settle) {
       await this.waitForContextsToSettle(deadline);
@@ -129,12 +138,18 @@ export class WebView {
     for (;;) {
       try {
         await this.device.switchContext(NATIVE_CONTEXT);
-        const target = context ?? (await this.findWebViewContext());
+        // Which window is an Android page's is worked out from the page list, which only
+        // NATIVE_APP can read.
+        const listed =
+          page != null && devToolsPageId(page) != null ? await this.device.webPages() : undefined;
+        const target = page?.context ?? context ?? (await this.findWebViewContext());
         if (!target) {
           throw new Error('no WebView context is available yet');
         }
         await this.device.switchContext(target);
-        if (pageUrl != null) {
+        if (page != null && listed != null) {
+          await this.switchToWebPage(page, listed);
+        } else if (pageUrl != null) {
           await this.switchToPage(pageUrl);
         }
 
@@ -174,8 +189,9 @@ export class WebView {
     } catch {
       // The session is gone; the message still says what it can.
     }
+    const where = page?.key ?? context;
     throw new Error(
-      `attach: could not reach ${what}${context != null ? ` in ${context}` : ''} within ` +
+      `attach: could not reach ${what}${where != null ? ` in ${where}` : ''} within ` +
         `${timeout}ms. Contexts Appium reports: ${available}. Last error: ${errorMessage(
           lastError,
         )}`,
@@ -219,6 +235,52 @@ export class WebView {
       seen.push(url);
     }
     throw new Error(`no page matching ${String(pageUrl)} yet; open pages: ${JSON.stringify(seen)}`);
+  }
+
+  /**
+   * Points the bound context at an Android page's own window, `listed` being `device.webPages()`
+   * from just before: one context spans every page of a WebView or browser.
+   *
+   * A WebView lists its pages under the DevTools target id chromedriver names their windows after
+   * (`CDwindow-<id>` in older chromedrivers), which tells apart two pages at the same URL. Chrome
+   * lists its tabs by number instead (`WEBVIEW_chrome#4`), so when none of the context's pages is
+   * listed under a window, the window is the one at the page's current URL, and two windows at
+   * that URL cannot be told apart. Throws, for the caller to retry, while there is no window.
+   */
+  private async switchToWebPage(page: WebPage, listed: WebPage[]): Promise<void> {
+    const current = listed.find((candidate) => candidate.key === page.key);
+    if (current == null) {
+      throw new Error(`page ${page.key} is no longer listed`);
+    }
+    const handles = await this.device.getWindowHandles();
+    const windowOf = (candidate: WebPage) => {
+      const id = devToolsPageId(candidate);
+      return handles.find((handle) => handle === id || handle === `CDwindow-${id}`);
+    };
+
+    const own = windowOf(current);
+    if (own != null) {
+      await this.device.switchToWindow(own);
+      return;
+    }
+    if (listed.some((sibling) => sibling.context === page.context && windowOf(sibling) != null)) {
+      throw new Error(`no window for page ${page.key} yet; windows: ${JSON.stringify(handles)}`);
+    }
+
+    const atUrl: string[] = [];
+    for (const handle of handles) {
+      await this.device.switchToWindow(handle);
+      if ((await this.device.getUrl()) === current.url) {
+        atUrl.push(handle);
+      }
+    }
+    if (atUrl.length !== 1) {
+      throw new Error(
+        `no single window for page ${page.key}: none is listed under its id, and ` +
+          `${atUrl.length} are at ${current.url}`,
+      );
+    }
+    await this.device.switchToWindow(atUrl[0]!);
   }
 
   /**

@@ -1569,17 +1569,17 @@ export class Device {
 
   /**
    * Waits for a page that is not among `notIn` to load (a new popup reads `about:blank` for about
-   * a second first) and returns it: a `window.open()` popup, an OAuth window, a new tab. Take
-   * `notIn` from `webPages()` just before the tap that opens the page, and bind the page with
-   * `webView.attach({ context: page.context, pageUrl: page.url })`: plain discovery would bind
-   * the first WebView, not the new one. Leaves the session in NATIVE_APP.
+   * a second first) and returns it: a `window.open()` popup, an OAuth window, a new tab, the
+   * WebView an app rebuilt. Take `notIn` from `webPages()` just before the step that opens the
+   * page, and bind the page with `webView.attach({ page })`: plain discovery would bind the first
+   * WebView, not the new one. Leaves the session in NATIVE_APP.
    *
    * **Usage:**
    * ```js
    * const before = await device.webPages();
    * await webView.getByRole("link", { name: "Open PDF" }).tap();
    * const popup = await device.waitForWebPage({ notIn: before, url: ".pdf" });
-   * await webView.attach({ context: popup.context, pageUrl: popup.url });
+   * await webView.attach({ page: popup });
    * ```
    */
   @boxedStep
@@ -1589,14 +1589,13 @@ export class Device {
     timeout = WEB_PAGE_TIMEOUT_MS,
     pollInterval = WEB_PAGE_POLL_MS,
   }: WaitForWebPageOptions = {}): Promise<WebPage> {
+    // A page keeps its key through reloads and navigations on both platforms, so a page under a
+    // new key is new even at a URL `notIn` has: a second tab, the WebView an app rebuilt.
     const knownKeys = new Set(notIn.map((page) => page.key));
-    const knownUrls = new Set(notIn.map((page) => page.url));
     const deadline = Date.now() + timeout;
 
     for (;;) {
-      const fresh = (await this.webPages()).filter(
-        (page) => !knownKeys.has(page.key) && !knownUrls.has(page.url),
-      );
+      const fresh = (await this.webPages()).filter((page) => !knownKeys.has(page.key));
       const found = fresh.find(
         (page) => hasLoadedUrl(page) && (url == null || urlMatches(page.url, url)),
       );
