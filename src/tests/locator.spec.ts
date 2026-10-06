@@ -97,7 +97,7 @@ test("waitFor attached state works for hidden element", async () => {
     "//attached-hidden-element",
     "xpath",
   );
-  expect(await locator.waitFor("attached")).toBe(true);
+  await expect(locator.waitFor("attached")).resolves.toBeUndefined();
   expect(mockFindElements).toHaveBeenCalledTimes(1);
   expect(mockIsElementDisplayed).toHaveBeenCalledTimes(0);
 });

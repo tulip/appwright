@@ -1,10 +1,20 @@
-import { z } from 'zod';
+import type { z } from 'zod';
 
 import { Device } from '../device';
 
 export type ExtractType<T> = T extends z.ZodType ? z.infer<T> : never;
 
+/**
+ * A model name for `device.beta.query()`, handed to `@empiricalrun/llm` (`'gpt-4o'`, …). A plain
+ * string, so appwright's types do not depend on that optional package.
+ */
+export type VisionModel = string;
+
 export type ActionOptions = {
+  /**
+   * How long to wait for the element, in milliseconds. Defaults to the project's
+   * `expectTimeout`; `0` makes a single attempt.
+   */
   timeout: number;
 };
 
@@ -31,12 +41,183 @@ export type LabelOptions = {
    */
   exact?: boolean;
   /**
-   * Restrict the match to editable text fields (`EditText` on Android; `TextField`,
-   * `SecureTextField` and `TextView` on iOS). A web page rendered natively on iOS repeats one
-   * label across the field's wrapper, its `<label>` StaticText and the input itself, and a bare
-   * label match can land `fill()` on the StaticText. Ignored by `webView.getByLabel()`.
+   * Restrict the match to editable text fields (`EditText` and `AutoCompleteTextView` on
+   * Android; `TextField`, `SecureTextField` and `TextView` on iOS). A web page rendered natively
+   * on iOS repeats one label across the field's wrapper, its `<label>` StaticText and the input
+   * itself, and a bare label match can land `fill()` on the StaticText. Ignored by
+   * `webView.getByLabel()`.
    */
   editable?: boolean;
+};
+
+export type TextOptions = {
+  /**
+   * Match the whole text instead of a substring. Defaults to `false`. Either way the match is
+   * case-sensitive — pass a `RegExp` with the `i` flag for a case-insensitive one — and in a
+   * WebView the text is whitespace-normalised first.
+   */
+  exact?: boolean;
+};
+
+/** The ARIA roles `getByRole()` accepts, as in Playwright. */
+export type AriaRole =
+  | 'alert'
+  | 'alertdialog'
+  | 'application'
+  | 'article'
+  | 'banner'
+  | 'blockquote'
+  | 'button'
+  | 'caption'
+  | 'cell'
+  | 'checkbox'
+  | 'code'
+  | 'columnheader'
+  | 'combobox'
+  | 'complementary'
+  | 'contentinfo'
+  | 'definition'
+  | 'deletion'
+  | 'dialog'
+  | 'directory'
+  | 'document'
+  | 'emphasis'
+  | 'feed'
+  | 'figure'
+  | 'form'
+  | 'generic'
+  | 'grid'
+  | 'gridcell'
+  | 'group'
+  | 'heading'
+  | 'img'
+  | 'insertion'
+  | 'link'
+  | 'list'
+  | 'listbox'
+  | 'listitem'
+  | 'log'
+  | 'main'
+  | 'marquee'
+  | 'math'
+  | 'meter'
+  | 'menu'
+  | 'menubar'
+  | 'menuitem'
+  | 'menuitemcheckbox'
+  | 'menuitemradio'
+  | 'navigation'
+  | 'none'
+  | 'note'
+  | 'option'
+  | 'paragraph'
+  | 'presentation'
+  | 'progressbar'
+  | 'radio'
+  | 'radiogroup'
+  | 'region'
+  | 'row'
+  | 'rowgroup'
+  | 'rowheader'
+  | 'scrollbar'
+  | 'search'
+  | 'searchbox'
+  | 'separator'
+  | 'slider'
+  | 'spinbutton'
+  | 'status'
+  | 'strong'
+  | 'subscript'
+  | 'superscript'
+  | 'switch'
+  | 'tab'
+  | 'table'
+  | 'tablist'
+  | 'tabpanel'
+  | 'term'
+  | 'textbox'
+  | 'time'
+  | 'timer'
+  | 'toolbar'
+  | 'tooltip'
+  | 'tree'
+  | 'treegrid'
+  | 'treeitem';
+
+export type RoleOptions = {
+  /**
+   * The accessible name, from the first of: `aria-labelledby`, `aria-label`, an associated
+   * `<label>`, `alt` / an input button's `value`, the text content (for roles named by their
+   * content: buttons, links, headings, menu items, tabs, cells…), `title`, `placeholder`.
+   */
+  name?: string | RegExp;
+  /**
+   * Match `name` whole — the default, as for `getByLabel()` — or as a substring with `false`.
+   * Case-sensitive either way, after whitespace normalisation; ignored for a `RegExp`.
+   */
+  exact?: boolean;
+  /** The heading level: `<h2>` is 2, as is a `role="heading"` without `aria-level`. */
+  level?: number;
+};
+
+export type IdOptions = {
+  /** Defaults to `true`. Set it to `false` to match a substring of the id. */
+  exact?: boolean;
+  /**
+   * Restrict the match to editable text fields, as `LabelOptions.editable` does. An id is not
+   * always unique to the field: a system dialog on Android can give the field and its label the
+   * same resource id, and on iOS a test id can sit on a field's wrapper as well as the input.
+   */
+  editable?: boolean;
+};
+
+export type TerminateAppOptions = {
+  /**
+   * **iOS simulator only.** Kill the process with `xcrun simctl terminate` instead of asking
+   * WebDriverAgent. That reaches bundle ids XCUITest does not treat as apps, such as the
+   * `com.apple.SafariViewService` process behind an `ASWebAuthenticationSession`. An app that
+   * is not running is not an error. Android's terminate is already a force-stop, so `force`
+   * changes nothing there; a physical iOS device throws.
+   *
+   * Killed this way, the app under test is gone without WebDriverAgent's knowledge, and it
+   * reports the app as crashed until `activateApp()` brings it back. The plain terminate is the
+   * one to use for the app under test.
+   */
+  force?: boolean;
+};
+
+export type AttachOptions = {
+  /**
+   * Bind this context by name instead of discovering one, e.g. `'WEBVIEW_chrome'` for a Chrome
+   * Custom Tab. Without it, a context is discovered as other `webView` calls do: on Android, the
+   * WebView of the app in front (Chrome's `WEBVIEW_chrome` when that is Chrome); on iOS, the
+   * first WebView XCUITest lists for the app under test.
+   */
+  context?: string;
+  /**
+   * The page to drive: one whose URL contains this string, or matches this RegExp. A browser
+   * context spans every open tab, and chromedriver otherwise lands on whichever one Chrome lists
+   * first, such as the new-tab page its first-run screens leave behind.
+   */
+  pageUrl?: string | RegExp;
+  /**
+   * Bind this page, as `device.webPages()` or `device.waitForWebPage()` returned it, in place of
+   * `context` and `pageUrl`. On Android it picks the page's own window by its DevTools id, which
+   * tells apart two pages at the same URL: a WebView the app rebuilt and the one it replaced.
+   * Chrome numbers its tabs instead, so a Chrome tab is the window at the tab's current URL.
+   */
+  page?: WebPage;
+  /** A CSS selector that must be in the page's DOM before the attach counts. */
+  probeSelector?: string;
+  /** How long to keep trying, in milliseconds. Defaults to 60 000. */
+  timeout?: number;
+  /**
+   * First wait until the set of WEBVIEW contexts has stopped changing for 5 s. On iOS a relaunch
+   * replaces the page (`WEBVIEW_<pid>.1` with `.2`), and a script sent to the outgoing page does
+   * not fail but holds the session for the driver's `webviewAtomWaitTimeout` (120 s) — while
+   * listing contexts cannot hang. Costs at least 5 s, so it is off by default.
+   */
+  settle?: boolean;
 };
 
 export type OpenUrlOptions = {
@@ -62,6 +243,100 @@ export type WaitForFileOptions = {
    * done. Defaults to "non-empty".
    */
   isReady?: (contents: Buffer) => boolean;
+};
+
+/**
+ * A rectangle in the driver's units: points on iOS, physical pixels on Android. A WebView
+ * element's rectangle is in the page's CSS pixels instead, relative to the document.
+ */
+export type Rect = { x: number; y: number; width: number; height: number };
+
+/** A screen position in the driver's units, as `Rect`. */
+export type Point = { x: number; y: number };
+
+export type SetOrientationOptions = {
+  /** How long the window may take to take the new shape, in milliseconds. Defaults to 10 000. */
+  timeout?: number;
+};
+
+export type DragOptions = {
+  /** Where the finger goes down, in the driver's units (see `Rect`). */
+  from: Point;
+  /** Where it lifts. */
+  to: Point;
+  /** How long the move takes, in milliseconds. Defaults to 400. */
+  duration?: number;
+};
+
+/** The side of the screen a `swipeFromEdge()` starts from. */
+export type ScreenEdge = 'left' | 'right';
+
+export type SwipeFromEdgeOptions = {
+  /**
+   * How far in from the edge the finger goes down, in points on iOS and dp on Android, so one
+   * value means the same distance on every screen density. Defaults to 2.
+   */
+  inset?: number;
+  /** How far the finger travels, as a fraction of the window width. Defaults to 0.7. */
+  distance?: number;
+  /** The height of the swipe, as a fraction of the window height from the top. Defaults to 0.5. */
+  y?: number;
+  /** How long the move takes, in milliseconds. Defaults to 400. */
+  duration?: number;
+};
+
+/** An app's run state, as both drivers' `mobile: queryAppState` report it. */
+export enum AppState {
+  NotInstalled = 0,
+  NotRunning = 1,
+  Suspended = 2,
+  Background = 3,
+  Foreground = 4,
+}
+
+/** What a build file declares about itself. */
+export type BuildInfo = {
+  /** Bundle id (`CFBundleIdentifier`) or package name. */
+  bundleId: string;
+  /** The user-facing version: `CFBundleShortVersionString` or `versionName`. */
+  version: string;
+  /** `CFBundleVersion` or `versionCode`. */
+  buildNumber: string;
+  /** The build file, as an absolute path. */
+  path: string;
+};
+
+export type AlertButtonOptions = {
+  /** Tap the button with this label instead of the driver's default accept / dismiss button. */
+  buttonLabel?: string;
+};
+
+/** One page of one WebView, as `mobile: getContexts` lists it. */
+export type WebPage = {
+  /** The Appium context the page is in. `webView.attach({ page })` binds the page itself. */
+  context: string;
+  /**
+   * Unique per page: the context on iOS, where each page has its own; the context plus the
+   * DevTools page id on Android, where one context spans every page of a WebView or browser.
+   */
+  key: string;
+  url: string;
+  title: string;
+};
+
+export type WaitForWebPageOptions = {
+  /**
+   * Pages that do not count: usually `await device.webPages()` from just before the step that
+   * opens the new one. A page keeps its key through reloads and navigations, so only the key is
+   * compared: a second tab at a URL among them, or the WebView an app rebuilt there, is new.
+   */
+  notIn?: WebPage[];
+  /** A string the page's URL contains, or a RegExp it matches. */
+  url?: string | RegExp;
+  /** Defaults to 30 000 ms. */
+  timeout?: number;
+  /** Defaults to 500 ms. */
+  pollInterval?: number;
 };
 
 export type AppResetMode = 'reinstall' | 'clearData';
@@ -462,6 +737,19 @@ export interface AppwrightLocator {
    */
   getText(options?: ActionOptions): Promise<string>;
 
+  /**
+   * The element's position and size, as Playwright's `boundingBox()` gives them. Waits for the
+   * element to be visible first. Natively the rectangle is in the driver's units — points on iOS,
+   * physical pixels on Android, the units of `device.getWindowRect()` and `device.drag()` — and
+   * in a WebView it is in the page's CSS pixels, relative to the document.
+   *
+   * **Usage:**
+   * ```js
+   * const { width, height } = await device.getByText("Welcome").boundingBox();
+   * ```
+   */
+  boundingBox(options?: ActionOptions): Promise<Rect>;
+
   scroll(direction: ScrollDirection): Promise<void>;
 
   /**
@@ -470,6 +758,46 @@ export interface AppwrightLocator {
    * locator does not wrap.
    */
   getElement(): Promise<ElementReference | null>;
+
+  /**
+   * Locates an element by its text inside this one, with the semantics of the `getByText()` this
+   * locator's family uses: `webView.getByText()` for a WebView locator, `device.getByText()` for
+   * a native one.
+   *
+   * A chained locator looks inside the element this locator resolves to — the one `tap()` would
+   * act on — and, when that has no match, inside this locator's other matches.
+   *
+   * **Usage:**
+   * ```js
+   * await webView.getByRole("menu").getByText("Device", { exact: true }).waitFor("visible");
+   * await device.getById("print-dialog").getByText("Save").tap();
+   * ```
+   */
+  getByText(text: string | RegExp, options?: TextOptions): AppwrightLocator;
+
+  /**
+   * [WebView] Locates an element by ARIA role inside this one; see `webView.getByRole()`.
+   * Throws on a native locator: native views have no ARIA roles.
+   *
+   * **Usage:**
+   * ```js
+   * await webView.getByTestId("player-menu").getByRole("button", { name: "Settings" }).tap();
+   * ```
+   */
+  getByRole(role: AriaRole, options?: RoleOptions): AppwrightLocator;
+
+  /**
+   * Locates an element by accessibility label inside this one: `aria-label` in a WebView,
+   * `content-desc` / `label` natively, as `getByLabel()` does.
+   */
+  getByLabel(label: string, options?: LabelOptions): AppwrightLocator;
+
+  /**
+   * Locates an element by test id inside this one: `data-testid` in a WebView; natively the
+   * accessibility identifier `device.getById()` matches (`resource-id` / `name`), where React
+   * Native's `testID` lands.
+   */
+  getByTestId(testId: string): AppwrightLocator;
 }
 
 export enum WebDriverErrors {

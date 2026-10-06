@@ -4,15 +4,32 @@ import { Client as WebDriverClient } from 'webdriver';
 
 import {
   ActionOptions,
+  AppwrightLocator,
+  AriaRole,
   ELEMENT_REFERENCE_ID,
   ElementReference,
   FillOptions,
+  LabelOptions,
+  Rect,
+  RoleOptions,
   ScrollDirection,
+  TextOptions,
   TimeoutOptions,
   WebDriverErrors,
 } from '../types';
 import { NonRetryableError, RetryableError, TimeoutError } from '../types/errors';
 import { boxedStep, isNoSuchWindowError } from '../utils';
+import {
+  LocatorQuery,
+  nativeIdQuery,
+  nativeLabelQuery,
+  nativeTextQuery,
+  SCRIPT_FIND_STRATEGY,
+  webLabelQuery,
+  webRoleQuery,
+  webTestIdQuery,
+  webTextQuery,
+} from './queries';
 
 /**
  * Empties an `<input>`/`<textarea>` the way React notices. chromedriver's `elementClear` fires
@@ -49,7 +66,34 @@ const ANDROID_KEYCODES: Record<string, number> = {
 
 type ElementState = 'attached' | 'visible' | 'hidden';
 
+/**
+ * Locator methods that build another locator rather than act on the element. They are
+ * synchronous, so the context-switching proxies of `Device` and `WebView` pass them through.
+ */
+export const CHAIN_METHODS: ReadonlySet<PropertyKey> = new Set([
+  'getByText',
+  'getByRole',
+  'getByLabel',
+  'getByTestId',
+]);
+
+export type LocatorOptions = {
+  /** For a chained locator: the locator whose element this one is looked up inside. */
+  parent?: Locator;
+  /** Shown in step titles and errors instead of the selector. */
+  description?: string;
+  /**
+   * Turns a chained child into what the caller gets back: the context-switching proxy of the
+   * `Device` or `WebView` that made this locator.
+   */
+  wrap?: (locator: Locator) => AppwrightLocator;
+};
+
 export class Locator {
+  private readonly parent?: Locator;
+  readonly description?: string;
+  private readonly wrap?: (locator: Locator) => AppwrightLocator;
+
   constructor(
     private webDriverClient: WebDriverClient,
     private timeoutOpts: TimeoutOptions,
@@ -63,7 +107,67 @@ export class Locator {
      * differ between chromedriver (DOM) and the native drivers (element attributes).
      */
     private isWeb: boolean = false,
-  ) {}
+    { parent, description, wrap }: LocatorOptions = {},
+  ) {
+    this.parent = parent;
+    this.description = description;
+    this.wrap = wrap;
+  }
+
+  /** How errors name this locator: its description, else its selector in quotes. */
+  private get named(): string {
+    return this.description ?? `"${this.selector}"`;
+  }
+
+  getByText(text: string | RegExp, options?: TextOptions): AppwrightLocator {
+    return this.chain(
+      this.isWeb
+        ? webTextQuery(text, options)
+        : nativeTextQuery(this.webDriverClient.isAndroid, text, options),
+    );
+  }
+
+  getByRole(role: AriaRole, options?: RoleOptions): AppwrightLocator {
+    if (!this.isWeb) {
+      throw new Error(
+        'getByRole() needs a WebView locator: native views have no ARIA roles. Chain ' +
+          'getByText(), getByLabel() or getByTestId() instead.',
+      );
+    }
+    return this.chain(webRoleQuery(role, options));
+  }
+
+  getByLabel(label: string, options?: LabelOptions): AppwrightLocator {
+    return this.chain(
+      this.isWeb
+        ? webLabelQuery(label, options)
+        : nativeLabelQuery(this.webDriverClient.isAndroid, label, options),
+    );
+  }
+
+  getByTestId(testId: string): AppwrightLocator {
+    return this.chain(
+      this.isWeb ? webTestIdQuery(testId) : nativeIdQuery(this.webDriverClient.isAndroid, testId),
+    );
+  }
+
+  private chain(query: LocatorQuery): AppwrightLocator {
+    const parentName = this.description ?? this.selector;
+    const child = new Locator(
+      this.webDriverClient,
+      this.timeoutOpts,
+      query.selector,
+      query.findStrategy,
+      query.textToMatch,
+      this.isWeb,
+      {
+        parent: this,
+        description: `${parentName} >> ${query.description ?? query.selector}`,
+        wrap: this.wrap,
+      },
+    );
+    return this.wrap ? this.wrap(child) : child;
+  }
 
   /**
    * Replaces the element's contents with `value`: clear, type, then read the value back. iOS
@@ -106,7 +210,7 @@ export class Locator {
     const got = secret ? `${entered.length} character(s)` : JSON.stringify(entered);
     const expected = secret ? `${value.length} character(s)` : JSON.stringify(value);
     throw new Error(
-      `Failed to fill: Element "${this.selector}" holds ${got} after filling ${expected}. ` +
+      `Failed to fill: Element ${this.named} holds ${got} after filling ${expected}. ` +
         'If the field reformats what is typed (input mask, maxLength, autocorrect), pass ' +
         '`{ verify: false }` and assert with inputValue() instead.',
     );
@@ -191,19 +295,30 @@ export class Locator {
   }
 
   async waitFor(state: ElementState, options?: ActionOptions): Promise<void> {
-    const timeoutFromConfig = this.timeoutOpts.expectTimeout;
-    const timeout = options?.timeout || timeoutFromConfig;
-    const result = await this.waitUntil(async () => {
+    await this.waitForElementId(state, options);
+  }
+
+  /**
+   * Polls until the element is in `state`, then returns the reference id of the element the
+   * poll found there (`null` for 'hidden', which nothing need match), so an action can use it
+   * without looking the element up again. `timeout: 0` makes a single attempt.
+   */
+  private async waitForElementId(
+    state: ElementState,
+    options?: ActionOptions,
+  ): Promise<string | null> {
+    const timeout = options?.timeout ?? this.timeoutOpts.expectTimeout;
+    return await this.waitUntil(async () => {
       const element = await this.getElement();
       const elementId = element?.[ELEMENT_REFERENCE_ID];
 
       if (!elementId) {
         // Nothing matches: that is exactly 'hidden', and not yet 'attached' or 'visible'.
-        return state === 'hidden';
+        return state === 'hidden' ? null : false;
       }
 
       if (state === 'attached') {
-        return true;
+        return elementId;
       }
 
       let isDisplayed: boolean;
@@ -220,15 +335,17 @@ export class Locator {
         throw error;
       }
 
-      return state === 'hidden' ? !isDisplayed : isDisplayed;
+      if (state === 'hidden') {
+        return isDisplayed ? false : null;
+      }
+      return isDisplayed ? elementId : false;
     }, timeout).catch((error: unknown) => {
       if (error instanceof TimeoutError) {
         const what = state === 'hidden' ? 'was still on the screen' : `did not become ${state}`;
-        throw new TimeoutError(`Element "${this.selector}" ${what} after ${timeout}ms`);
+        throw new TimeoutError(`Element ${this.named} ${what} after ${timeout}ms`);
       }
       throw error;
     });
-    return result;
   }
 
   private async waitUntil<ReturnValue>(
@@ -284,10 +401,17 @@ export class Locator {
   }
 
   @boxedStep
+  async boundingBox(options?: ActionOptions): Promise<Rect> {
+    const elementId = await this.requireVisibleElementId('boundingBox', options);
+    const { x, y, width, height } = await this.webDriverClient.getElementRect(elementId);
+    return { x, y, width, height };
+  }
+
+  @boxedStep
   async scroll(direction: ScrollDirection) {
     const element = await this.getElement();
     if (!element) {
-      throw new Error(`Failed to scroll: Element "${this.selector}" not found`);
+      throw new Error(`Failed to scroll: Element ${this.named} not found`);
     }
     if (this.webDriverClient.isAndroid) {
       await this.webDriverClient.executeScript('mobile: scrollGesture', [
@@ -310,64 +434,101 @@ export class Locator {
   /**
    * Retrieves the element reference based on the `selector`.
    *
-   * @returns
+   * A single match is returned as is. Of several, the last in document order wins — the
+   * probability of finding the element is higher at higher depth — and with `textToMatch` set,
+   * the last whose text matches it: a RegExp `getByText()` can only narrow the driver's search
+   * to a substring, if that.
+   *
+   * A chained locator looks inside its parent's element, trying the parent's matches in the same
+   * order until one contains a match.
    */
   async getElement(): Promise<ElementReference | null> {
-    /**
-     * Determine whether `path` is a regex or string, and find elements accordingly.
-     *
-     * If `path` is a regex:
-     * - Iterate through all the elements on the page
-     * - Extract text content of each element
-     * - Return the first matching element
-     *
-     * If `path` is a string:
-     * - Use `findStrategy` (either XPath, Android UIAutomator, or iOS predicate string) to find elements
-     * - Apply regex to clean extra characters from the matched element’s text
-     * - Return the first element that matches
-     */
-    let elements: ElementReference[] = await this.webDriverClient.findElements(
-      this.findStrategy,
-      this.selector,
-    );
-    // If there is only one element, return it
-    if (elements.length === 1) {
-      return elements[0]!;
-    }
-    // If there are multiple elements, we reverse the order since the probability
-    // of finding the element is higher at higher depth
-    const reversedElements = elements.reverse();
-    for (const element of reversedElements) {
-      let elementText = await this.webDriverClient.getElementText(element[ELEMENT_REFERENCE_ID]);
-      if (this.textToMatch) {
-        if (this.textToMatch instanceof RegExp && this.textToMatch.test(elementText)) {
-          return element;
-        }
-        if (typeof this.textToMatch === 'string' && elementText.includes(this.textToMatch!)) {
-          return element;
-        }
-      } else {
-        // This is returned for cases where xpath is findStrategy and we want
-        // to return the last element found in the list
-        return element;
-      }
+    for await (const element of this.matches()) {
+      return element;
     }
     return null;
   }
 
+  /** Every element this locator matches, the one `getElement()` returns first. */
+  private async *matches(): AsyncGenerator<ElementReference> {
+    const elements = await this.findAll();
+    if (elements.length === 1) {
+      yield elements[0]!;
+      return;
+    }
+    for (const element of elements.reverse()) {
+      if (this.textToMatch == null) {
+        yield element;
+        continue;
+      }
+      const elementText = await this.webDriverClient.getElementText(element[ELEMENT_REFERENCE_ID]);
+      if (
+        this.textToMatch instanceof RegExp
+          ? this.textToMatch.test(elementText)
+          : elementText.includes(this.textToMatch)
+      ) {
+        yield element;
+      }
+    }
+  }
+
+  private async findAll(): Promise<ElementReference[]> {
+    if (!this.parent) {
+      return await this.findIn(null);
+    }
+    for await (const root of this.parent.matches()) {
+      const found = await this.findIn(root);
+      if (found.length > 0) {
+        return found;
+      }
+    }
+    return [];
+  }
+
+  /** Asks the driver for the matches, in document order, under `root` or the whole screen. */
+  private async findIn(root: ElementReference | null): Promise<ElementReference[]> {
+    if (this.findStrategy === SCRIPT_FIND_STRATEGY) {
+      const found: ElementReference[] | null = await this.webDriverClient.executeScript(
+        this.selector,
+        [root],
+      );
+      return found ?? [];
+    }
+    if (root == null) {
+      return await this.webDriverClient.findElements(this.findStrategy, this.selector);
+    }
+    // An XPath is evaluated against the whole document even from an element unless it is
+    // relative, and a chained `getByText(/regex/)` falls back to `//*` natively.
+    const selector =
+      this.findStrategy === 'xpath' && this.selector.startsWith('//')
+        ? `.${this.selector}`
+        : this.selector;
+    return await this.webDriverClient.findElementsFromElement(
+      root[ELEMENT_REFERENCE_ID],
+      this.findStrategy,
+      selector,
+    );
+  }
+
   /**
-   * Waits for the element to be visible and returns its reference id, or throws with the
-   * action's name so the failure reads as "Failed to fill: …" rather than a bare timeout.
+   * Waits for the element to be visible and returns the reference id the wait found it under,
+   * or throws with the action's name so the failure reads as "Failed to fill: …" rather than a
+   * bare timeout. Finding it again would cost a second lookup per action, and on iOS every XPath
+   * lookup is a full page-source snapshot.
    */
   private async requireVisibleElementId(action: string, options?: ActionOptions): Promise<string> {
-    const isElementDisplayed = await this.isVisible(options);
-    if (!isElementDisplayed) {
-      throw new Error(`Failed to ${action}: Element "${this.selector}" not visible`);
+    let elementId: string | null;
+    try {
+      elementId = await this.waitForElementId('visible', options);
+    } catch (error) {
+      if (error instanceof TimeoutError) {
+        throw new Error(`Failed to ${action}: Element ${this.named} not visible`);
+      }
+      throw error;
     }
-    const element = await this.getElement();
-    const elementId = element?.[ELEMENT_REFERENCE_ID];
     if (!elementId) {
-      throw new Error(`Failed to ${action}: Element "${this.selector}" is not found`);
+      // Unreachable: a 'visible' wait resolves only with an element.
+      throw new Error(`Failed to ${action}: Element ${this.named} is not found`);
     }
     return elementId;
   }

@@ -28,6 +28,14 @@ export class AppiumPortInUseError extends Error {
   }
 }
 
+/**
+ * Appium's CLI from appwright's own dependencies, run with this Node. `npx appium` finds it only
+ * when the consumer's install happens to hoist Appium's bin into its own node_modules/.bin.
+ */
+function appiumCommand(args: string[]): { command: string; args: string[] } {
+  return { command: process.execPath, args: [require.resolve('appium'), ...args] };
+}
+
 /** The Appium server spawned by this process, killed by the single `process.on('exit')` guard. */
 let trackedAppiumProcess: ChildProcess | undefined;
 let exitGuardRegistered = false;
@@ -105,13 +113,14 @@ export async function startAppiumServer(port: number): Promise<ChildProcess> {
   return new Promise<ChildProcess>((resolve, reject) => {
     let settled = false;
     // https://github.com/appium/appium-uiautomator2-driver?tab=readme-ov-file#automatic-discovery-of-compatible-chromedriver
-    const appiumProcess = spawn(
-      'npx',
-      ['appium', '--port', String(port), '--allow-insecure=uiautomator2:chromedriver_autodownload'],
-      {
-        stdio: 'pipe',
-      },
-    );
+    const { command, args } = appiumCommand([
+      '--port',
+      String(port),
+      '--allow-insecure=uiautomator2:chromedriver_autodownload',
+    ]);
+    const appiumProcess = spawn(command, args, {
+      stdio: 'pipe',
+    });
     trackedAppiumProcess = appiumProcess;
     registerExitGuard();
 
@@ -274,13 +283,8 @@ function extractJsonObject(raw: string): Record<string, unknown> {
 export async function ensureDriverInstalled(driver: 'uiautomator2' | 'xcuitest'): Promise<void> {
   let installed: Record<string, unknown> = {};
   try {
-    const { stdout } = await execFilePromise('npx', [
-      'appium',
-      'driver',
-      'list',
-      '--installed',
-      '--json',
-    ]);
+    const { command, args } = appiumCommand(['driver', 'list', '--installed', '--json']);
+    const { stdout } = await execFilePromise(command, args);
     installed = extractJsonObject(stdout);
   } catch (error: any) {
     logger.warn(
@@ -293,7 +297,8 @@ export async function ensureDriverInstalled(driver: 'uiautomator2' | 'xcuitest')
   }
   logger.log(`Installing Appium driver "${driver}"...`);
   await new Promise<void>((resolve, reject) => {
-    const installProcess = spawn('npx', ['appium', 'driver', 'install', driver], {
+    const { command, args } = appiumCommand(['driver', 'install', driver]);
+    const installProcess = spawn(command, args, {
       stdio: 'pipe',
     });
     installProcess.stdout?.on('data', (data: Buffer) => {
@@ -500,4 +505,86 @@ export async function getApkDetails(buildPath: string): Promise<{
   } catch (error: any) {
     throw new Error(`getApkDetails: ${error.message}`);
   }
+}
+
+/** Runs `command` without a shell, feeding `input` to its stdin, and returns stdout. */
+function runCommand(command: string, args: string[], input?: Buffer): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const child = execFile(
+      command,
+      args,
+      { encoding: 'buffer', maxBuffer: 32 * 1024 * 1024 },
+      (error, stdout, stderr) => {
+        if (error) {
+          const detail = stderr.toString().trim() || error.message;
+          reject(new Error(`${command} ${args.join(' ')} failed: ${detail}`));
+        } else {
+          resolve(stdout);
+        }
+      },
+    );
+    child.stdin?.end(input);
+  });
+}
+
+/** The fields of the `package:` line of `aapt dump badging`. */
+export function parseApkBadging(badging: string): {
+  packageName?: string;
+  versionCode?: string;
+  versionName?: string;
+} {
+  const line = /^package: (.*)$/m.exec(badging)?.[1] ?? '';
+  const field = (name: string) => new RegExp(`\\b${name}='([^']*)'`).exec(line)?.[1];
+  return {
+    packageName: field('name'),
+    versionCode: field('versionCode'),
+    versionName: field('versionName'),
+  };
+}
+
+/**
+ * What an `.app`, `.ipa` or `.apk` declares about itself, read on the host: `Info.plist`
+ * through `plutil` (out of the archive with `unzip` for an `.ipa`), or `aapt dump badging` from
+ * the newest build-tools under `ANDROID_HOME`.
+ */
+export async function readBuildInfo(buildPath: string): Promise<{
+  bundleId: string;
+  version: string;
+  buildNumber: string;
+  path: string;
+}> {
+  const absolute = path.resolve(buildPath);
+
+  if (absolute.endsWith('.apk')) {
+    const buildToolsVersion = await getLatestBuildToolsVersion();
+    const aapt = path.join(process.env.ANDROID_HOME!, 'build-tools', buildToolsVersion!, 'aapt');
+    const badging = (await runCommand(aapt, ['dump', 'badging', absolute])).toString();
+    const { packageName, versionCode, versionName } = parseApkBadging(badging);
+    if (!packageName || versionName == null || versionCode == null) {
+      throw new Error(`${absolute} declares no package name, versionName or versionCode.`);
+    }
+    return {
+      bundleId: packageName,
+      version: versionName,
+      buildNumber: versionCode,
+      path: absolute,
+    };
+  }
+
+  let plist: Buffer;
+  if (absolute.endsWith('.app')) {
+    plist = await fs.readFile(path.join(absolute, 'Info.plist'));
+  } else if (absolute.endsWith('.ipa')) {
+    plist = await runCommand('unzip', ['-p', absolute, 'Payload/*.app/Info.plist']);
+  } else {
+    throw new Error(`Cannot read build info from ${absolute}: use an .app, .ipa or .apk.`);
+  }
+  const value = async (key: string) =>
+    (await runCommand('plutil', ['-extract', key, 'raw', '-o', '-', '-'], plist)).toString().trim();
+  return {
+    bundleId: await value('CFBundleIdentifier'),
+    version: await value('CFBundleShortVersionString'),
+    buildNumber: await value('CFBundleVersion'),
+    path: absolute,
+  };
 }

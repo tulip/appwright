@@ -38,11 +38,16 @@ function isInsideTest(): boolean {
 export function boxedStep(target: Function, context: ClassMethodDecoratorContext) {
   return function replacementMethod(
     this: {
-      selector: string | RegExp;
+      selector?: string | RegExp;
+      description?: string;
     },
     ...args: any
   ) {
-    const path = this.selector ? `("${this.selector}")` : '';
+    const path = this.description
+      ? `(${this.description})`
+      : this.selector
+      ? `("${this.selector}")`
+      : '';
     const argsString = formatStepArgs(Array.from(args));
     const name = `${context.name as string}${path}${argsString}`;
     if (!isInsideTest()) {
@@ -146,4 +151,27 @@ export function isNoSuchWindowError(error: unknown): boolean {
   }
   const errorString = String(error).toLowerCase();
   return errorString.includes('no such window') || errorString.includes('nosuchwindowerror');
+}
+
+/**
+ * The name to switch to for a context Appium reported. Appium returns plain names unless the
+ * session asked for the full context list, whose entries are objects named by `id` (their `title`
+ * is the page's title).
+ */
+export function contextName(context: string | { id: string }): string {
+  return typeof context === 'string' ? context : context.id;
+}
+
+export function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/** Whether `url` contains `pattern`, or matches it when it is a RegExp. */
+export function urlMatches(url: string, pattern: string | RegExp): boolean {
+  if (typeof pattern === 'string') {
+    return url.includes(pattern);
+  }
+  // A `g`/`y` RegExp resumes from where its previous test() matched.
+  pattern.lastIndex = 0;
+  return pattern.test(url);
 }
