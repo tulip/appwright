@@ -174,6 +174,10 @@ export type TerminateAppOptions = {
    * `com.apple.SafariViewService` process behind an `ASWebAuthenticationSession`. An app that
    * is not running is not an error. Android's terminate is already a force-stop, so `force`
    * changes nothing there; a physical iOS device throws.
+   *
+   * Killed this way, the app under test is gone without WebDriverAgent's knowledge, and it
+   * reports the app as crashed until `activateApp()` brings it back. The plain terminate is the
+   * one to use for the app under test.
    */
   force?: boolean;
 };
