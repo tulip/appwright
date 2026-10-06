@@ -153,6 +153,16 @@ To extract text from an element, you can use the `getText` method.
 const text = await device.getByText('Playwright').getText();
 ```
 
+### Measuring an element
+
+`boundingBox` returns the element's `{ x, y, width, height }` once it is visible, as Playwright's does. A native element's rectangle is in the driver's units — points on iOS, physical pixels on Android, the units of `device.getWindowRect()` and `device.drag()` — and a WebView element's is in the page's CSS pixels, relative to the document.
+
+```ts
+const window = await device.getWindowRect();
+const box = await device.getByText('Welcome', { exact: true }).boundingBox();
+expect(box.x + box.width).toBeLessThanOrEqual(window.width);
+```
+
 ## Check for visibility of an element
 
 To check if an element is visible on the screen, you can use the `isVisible` method.

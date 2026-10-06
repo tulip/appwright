@@ -20,6 +20,21 @@ locator look inside its element. `getByTestId()` and `getByPlaceholder()` escape
 simulator, `simulatorContainerPath()` and `terminateApp(appId, { force: true })` go through
 `xcrun simctl`.
 
+**Rotation, gestures, alerts.** `setOrientation()` rotates mid-test and returns once the driver and
+the window shape agree; `getOrientation()` and `getWindowRect()` read them. The `device` fixture
+rotates the device back to the configured `device.orientation` after a test that rotated, since a
+rotation outlives the session. `drag({ from, to })` and `swipeFromEdge('left' | 'right')` are W3C
+touch gestures, and `pressBack()` is Android's back key. `locator.boundingBox()` measures an
+element. On iOS, where every provider starts the session with `appium:autoAcceptAlerts`,
+`withAlertAutoAccept(false, fn)` / `setAlertAutoAccept()` keep WebDriverAgent from answering the
+app's own alerts, and `acceptAlert()` / `dismissAlert()` / `getAlertText()` answer them on both
+platforms.
+
+**App and pages.** `getAppState()` (an exported `AppState`) and `getBuildInfo()` (bundle id, version
+and build number read off the project's build) need no host-side parsing in the suite.
+`webPages()` lists every WebView page the session can see, and `waitForWebPage({ notIn, url })`
+waits for a new one — a popup, an OAuth window, a new tab — to load, for `webView.attach()` to bind.
+
 **Package.** `request` and the types `APIRequest`, `APIRequestContext`, `APIResponse` and
 `TestInfo` are re-exported from `@playwright/test`. The CLI runs Playwright and Appium from
 appwright's own dependencies rather than `npx`, so their bins need not be hoisted.
