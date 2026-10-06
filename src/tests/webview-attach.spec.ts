@@ -175,11 +175,17 @@ describe('WebView discovery', () => {
         { id: `WEBVIEW_${APP}`, title: 'Player' },
       ],
     });
+    const log = vi.spyOn(console, 'log');
     await webView(client)
       .getByTestId('x')
       .getElement()
       .catch(() => undefined);
     expect(switches(client)).toContain(`WEBVIEW_${APP}`);
     expect(switches(client)).not.toContain('WEBVIEW_com.other.app');
+    // Said out loud rather than dropped silently.
+    expect(log).toHaveBeenCalledWith(
+      `[WebView] Skipping WEBVIEW_com.other.app: not ${APP}'s, the app in front.`,
+    );
+    log.mockRestore();
   });
 });
