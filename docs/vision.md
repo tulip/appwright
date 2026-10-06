@@ -2,6 +2,14 @@
 
 Appwright provides a set of built-in methods to tap or extract information from the screen. These methods use LLM Capabilities to perform actions on the screen.
 
+They run on `@empiricalrun/llm`, an optional peer dependency that appwright does not install: it brings several AI SDKs, the AWS SDK and `sharp` with it. Add it to the project that uses `device.beta`:
+
+```sh
+npm install --save-dev @empiricalrun/llm
+```
+
+Appwright loads it the first time `device.beta.query()` or `device.beta.tap()` runs, and those throw with the command above when it is missing.
+
 ## Extract information from the screen
 
 The `query` method allows you to extract information from the screen based on a prompt. Ensure the `OPENAI_API_KEY` environment variable is set to authenticate the API request.

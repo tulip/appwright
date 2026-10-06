@@ -1,8 +1,14 @@
-import { z } from 'zod';
+import type { z } from 'zod';
 
 import { Device } from '../device';
 
 export type ExtractType<T> = T extends z.ZodType ? z.infer<T> : never;
+
+/**
+ * A model name for `device.beta.query()`, handed to `@empiricalrun/llm` (`'gpt-4o'`, …). A plain
+ * string, so appwright's types do not depend on that optional package.
+ */
+export type VisionModel = string;
 
 export type ActionOptions = {
   timeout: number;

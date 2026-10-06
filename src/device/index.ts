@@ -2,9 +2,7 @@ import { execFile } from 'child_process';
 import path from 'path';
 import { promisify } from 'util';
 import type { Client as WebDriverClient } from 'webdriver';
-import { z } from 'zod';
-
-import { LLMModel } from '@empiricalrun/llm';
+import type { z } from 'zod';
 
 import { CHAIN_METHODS, Locator } from '../locator';
 import { LocatorQuery, nativeIdQuery, nativeLabelQuery, nativeTextQuery } from '../locator/queries';
@@ -22,6 +20,7 @@ import {
   TerminateAppOptions,
   TextOptions,
   TimeoutOptions,
+  VisionModel,
   WaitForAppToCloseOptions,
   WaitForFileOptions,
 } from '../types';
@@ -167,7 +166,7 @@ export class Device {
       prompt: string,
       options?: {
         responseFormat?: T;
-        model?: LLMModel;
+        model?: VisionModel;
         screenshot?: string;
         telemetry?: {
           tags?: string[];
