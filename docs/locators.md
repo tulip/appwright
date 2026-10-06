@@ -80,7 +80,9 @@ await device.getByIosPredicate('type == "XCUIElementTypeSwitch" AND value == "1"
 
 // Android: a UiSelector expression
 await device
-  .getByAndroidUiAutomator('new UiSelector().resourceId("android:id/button1").className("android.widget.Button")')
+  .getByAndroidUiAutomator(
+    'new UiSelector().resourceId("android:id/button1").className("android.widget.Button")',
+  )
   .tap();
 ```
 
@@ -190,17 +192,47 @@ await webView.getByTestId('username-input').fill('admin');
 
 ### Get an element by Text
 
-Select elements by their visible text content.
+Select elements by their text the way Playwright's `getByText` does: the element whose whitespace-normalised text matches while none of its children's does. `<li><b>Device</b></li>` yields the `<b>`, not the `<li>` and every ancestor up to `<body>`. Text in `<script>`, `<style>` and `<head>` (so the page title) never matches, and an `<input type="submit">` matches by its value.
 
 ```ts
 await webView.getByText('Welcome').tap();
 await webView.getByText('Submit', { exact: true }).tap();
 ```
 
-You can also use RegExp patterns:
+The default is a substring match; `exact: true` compares the whole text. Unlike Playwright, the match is case-sensitive, as it is for `device.getByText`. A RegExp is tested against the normalised text, so it covers everything else:
 
 ```ts
-await webView.getByText(/Welcome.*/);
+await expect(webView.getByText(/^User \d+$/)).toBeVisible();
+await webView.getByText(/^log out$/i).tap();
+```
+
+### Get an element by Role
+
+Select elements by ARIA role and accessible name, the way Playwright's `getByRole` does. The role is the element's `role` attribute or its implicit HTML one: `<button>` and `<input type="submit">` are buttons, `<h1>`–`<h6>` headings, `<a href>` a link, `<input type="checkbox">` a checkbox, and so on. `menu` and `menuitem` come from the `role` attribute alone. Elements hidden from assistive technology (`aria-hidden="true"`, `display: none`, `visibility: hidden`) are skipped.
+
+```ts
+await webView.getByRole('button', { name: 'Menu' }).tap();
+await expect(webView.getByRole('heading', { name: 'Device Settings', level: 2 })).toBeVisible();
+```
+
+`name` is the accessible name, taken from the first of `aria-labelledby`, `aria-label`, an associated `<label>`, `alt` (or an input button's `value`), the text content (for roles named by their content, such as buttons, links, headings, menu items, tabs and cells), `title` and `placeholder`. An icon button is named by its `aria-label`. The name is matched whole by default, as `getByLabel` is; pass `exact: false` for a substring, or a RegExp.
+
+### Chaining locators
+
+`getByText`, `getByRole`, `getByLabel` and `getByTestId` can also be called on a locator, to look inside its element. Use them to scope a match to one part of the page instead of writing an XPath:
+
+```ts
+const menu = webView.getByTestId('player-menu');
+await menu.getByRole('button', { name: 'Settings' }).tap();
+await expect(webView.getByRole('menu').getByText('Device', { exact: true })).toBeVisible();
+```
+
+The child is looked up inside the element its parent resolves to (the one `tap()` would act on) and, when that has no match, inside the parent's other matches. Errors name the whole chain, such as `[data-testid="player-menu"] >> getByRole("button", { name: "Settings" })`.
+
+Native locators chain too, with `device` semantics: `getByText` and `getByLabel` as on `device`, and `getByTestId` matching the accessibility identifier `device.getById` reads. `getByRole` throws there, since native views have no ARIA roles.
+
+```ts
+await device.getById('print-dialog').getByText('Save', { exact: true }).tap();
 ```
 
 ### Get an element by CSS Selector
