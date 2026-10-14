@@ -6,18 +6,14 @@ import {
   AppwrightConfig,
   DeviceProvider,
   EmulatorConfig,
+  LeasedDevice,
   Platform,
   TimeoutOptions,
 } from '../../types';
 import { validateBuildPath } from '../../utils';
 import { getActiveAndroidDevices, getApkDetails, getAppBundleId, isAppiumHealthy } from '../appium';
-import {
-  getAppiumPort,
-  getDeviceEntryForSlot,
-  getSlotCapabilities,
-  mergeCapabilities,
-  resolveDeviceEntries,
-} from '../slots';
+import { getLeasedDeviceForSlot } from '../device-pool';
+import { getAppiumPort, getSlotCapabilities, mergeCapabilities } from '../slots';
 import { ensureEmulatorsBooted, listAvds } from './boot';
 
 export class EmulatorProvider implements DeviceProvider {
@@ -38,9 +34,8 @@ export class EmulatorProvider implements DeviceProvider {
     return await this.createDriver();
   }
 
-  async globalSetup(options?: { workers: number }) {
+  async globalSetup(options?: { workers: number; devices?: LeasedDevice[] }) {
     const platform = this.project.use.platform!;
-    const deviceConfig = this.project.use.device as EmulatorConfig;
 
     validateBuildPath(this.project.use.buildPath, platform == Platform.ANDROID ? '.apk' : '.app');
 
@@ -69,18 +64,11 @@ Follow the steps mentioned in ${androidSimulatorConfigDocLink} to run test on An
       await listAvds();
     }
 
-    // Boot one emulator/simulator per worker slot. Configured devices beyond the worker count
-    // are left alone, so a config can list every device and a run use a subset.
-    const configured = resolveDeviceEntries(deviceConfig);
-    let entries = configured.slice(0, options?.workers ?? 1);
-    if (configured.length > entries.length) {
-      const skipped = configured.slice(entries.length).map((entry) => entry.udid);
-      logger.log(
-        `Using ${entries.length} of ${configured.length} configured devices ` +
-          `(${entries.map((entry) => entry.udid).join(', ')}); ` +
-          `skipping ${skipped.join(', ')} because \`workers\` is ${options?.workers ?? 1}.`,
-      );
-    }
+    // Boot the devices this run leased that are not running yet. Devices left out of the lease
+    // (busy with another run, or beyond `workers`) are never touched.
+    let entries = (options?.devices ?? [])
+      .filter((device): device is LeasedDevice & { udid: string } => !!device.udid)
+      .map((device) => ({ udid: device.udid, ...(device.avd && { avd: device.avd }) }));
 
     if (entries.length === 0 && platform == Platform.ANDROID) {
       // Legacy behaviour: nothing configured. If no emulator is online, boot the first installed
@@ -144,10 +132,10 @@ Follow the steps mentioned in ${androidSimulatorConfigDocLink} to run test on An
       this.cachedPackageName = packageName;
     }
 
-    // Device for this worker slot. `undefined` only when nothing is configured and slot is 0
+    // Device this run leased for the worker slot. `udid` is unset only when nothing is configured
     // (legacy behaviour: no udid is passed and the Appium driver picks a running emulator).
-    const entry = getDeviceEntryForSlot(deviceConfig, this.slot);
-    const udid = entry?.udid;
+    const leased = getLeasedDeviceForSlot(this.project.name, this.slot);
+    const udid = leased.udid;
 
     return {
       port: getAppiumPort(),
@@ -172,7 +160,7 @@ Follow the steps mentioned in ${androidSimulatorConfigDocLink} to run test on An
           'appium:newCommandTimeout': 300,
 
           // Ports/paths that must be unique per concurrent session on this host.
-          ...getSlotCapabilities(platformName, this.slot),
+          ...getSlotCapabilities(platformName, leased.portSlot, udid),
 
           ...(platformName == Platform.IOS && {
             'appium:wdaLaunchTimeout': 600_000,
