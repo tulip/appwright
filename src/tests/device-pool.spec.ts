@@ -62,6 +62,8 @@ function probeFrom(statuses: Record<string, Availability>) {
     new Map(entries.map((entry) => [entry.udid, statuses[entry.udid] ?? unavailable('unknown')]));
 }
 
+const noPortInUse = async () => false;
+
 const twoEmulators: DeviceEntry[] = [
   { udid: 'emulator-5554', avd: 'Pixel_A' },
   { udid: 'emulator-5556', avd: 'Pixel_B' },
@@ -85,6 +87,7 @@ describe('leaseRunDevices without --device', () => {
       runName: 'run-a',
       workers: 1,
       store,
+      portInUse: noPortInUse,
       probe: probeFrom({
         'emulator-5554': bootable('Pixel_A', 'Pixel_A'),
         'emulator-5556': bootable('Pixel_B', 'Pixel_B'),
@@ -112,6 +115,7 @@ describe('leaseRunDevices without --device', () => {
       runName: 'run-b',
       workers: 1,
       store,
+      portInUse: noPortInUse,
       probe: probeFrom({
         'emulator-5554': online('Pixel_A', 'Pixel_A'),
         'emulator-5556': bootable('Pixel_B', 'Pixel_B'),
@@ -126,6 +130,7 @@ describe('leaseRunDevices without --device', () => {
       runName: 'run-b',
       workers: 1,
       store,
+      portInUse: noPortInUse,
       probe: probeFrom({
         'emulator-5554': bootable('Pixel_A', 'Pixel_A'),
         'emulator-5556': bootable('Pixel_B', 'Pixel_B'),
@@ -143,6 +148,7 @@ describe('leaseRunDevices without --device', () => {
       runName: 'a',
       workers: 1,
       store,
+      portInUse: noPortInUse,
       probe,
     });
     // A second run in the same process would count as the same owner, so hand the first run's
@@ -154,6 +160,7 @@ describe('leaseRunDevices without --device', () => {
       runName: 'b',
       workers: 1,
       store,
+      portInUse: noPortInUse,
       probe,
     });
     expect(first.byProject.android![0]).toMatchObject({ udid: 'emulator-5554', portSlot: 0 });
@@ -165,6 +172,7 @@ describe('leaseRunDevices without --device', () => {
       runName: 'a',
       workers: 2,
       store,
+      portInUse: noPortInUse,
       probe: probeFrom({ 'emulator-5554': online(), 'emulator-5556': online() }),
     });
     expect(leases.byProject.android!.map((device) => [device.udid, device.portSlot])).toEqual([
@@ -179,6 +187,7 @@ describe('leaseRunDevices without --device', () => {
       runName: 'b',
       workers: 1,
       store,
+      portInUse: noPortInUse,
       probe: probeFrom({
         'emulator-5554': online(),
         'emulator-5556': unavailable('not running, and AVD "Pixel_B" is not installed'),
@@ -200,6 +209,7 @@ describe('leaseRunDevices without --device', () => {
       workers: 1,
       waitSeconds: 60,
       store,
+      portInUse: noPortInUse,
       probe: probeFrom({}),
       sleep: async () => {
         throw new Error('should not wait');
@@ -217,6 +227,7 @@ describe('leaseRunDevices without --device', () => {
       workers: 1,
       waitSeconds: 60,
       store,
+      portInUse: noPortInUse,
       probe: probeFrom({ 'emulator-5554': online() }),
       sleep: async () => {
         sleeps++;
@@ -238,6 +249,7 @@ describe('leaseRunDevices without --device', () => {
         runName: 'a',
         workers: 1,
         store,
+        portInUse: noPortInUse,
         probe: probeFrom({ 'emulator-5554': online(), 'SIM-1': unavailable('no simulator') }),
       },
     ).catch((e) => e);
@@ -252,11 +264,29 @@ describe('leaseRunDevices without --device', () => {
         project({ name: 'one', kind: 'android-device', pool }),
         project({ name: 'two', kind: 'android-device', pool }),
       ],
-      { runName: 'a', workers: 1, store, probe: probeFrom({ shared: online(), second: online() }) },
+      {
+        runName: 'a',
+        workers: 1,
+        store,
+        portInUse: noPortInUse,
+        probe: probeFrom({ shared: online(), second: online() }),
+      },
     );
     expect(leases.byProject.one![0]!.udid).toBe('shared');
     expect(leases.byProject.two![0]!.udid).toBe('second');
     expect(leases.byProject.one![0]!.portSlot).not.toBe(leases.byProject.two![0]!.portSlot);
+  });
+
+  test('skips port slots whose ports another program already listens on', async () => {
+    const taken = new Set([8100, 9101]);
+    const leases = await leaseRunDevices([project({ kind: 'android-device', pool: [] })], {
+      runName: 'a',
+      workers: 1,
+      store,
+      probe: probeFrom({}),
+      portInUse: async (port) => taken.has(port),
+    });
+    expect(leases.byProject.android).toEqual([{ portSlot: 2 }]);
   });
 
   test('a legacy config without a pool still leases a port slot', async () => {
@@ -264,6 +294,7 @@ describe('leaseRunDevices without --device', () => {
       runName: 'a',
       workers: 1,
       store,
+      portInUse: noPortInUse,
       probe: probeFrom({}),
     });
     expect(leases.byProject.android).toEqual([{ portSlot: 0 }]);
@@ -286,6 +317,7 @@ describe('leaseRunDevices with --device', () => {
       workers: 1,
       pinned: 'emulator-5556',
       store,
+      portInUse: noPortInUse,
       probe,
     });
     expect(leases.byProject.android!.map((device) => device.udid)).toEqual(['emulator-5556']);
@@ -298,6 +330,7 @@ describe('leaseRunDevices with --device', () => {
         workers: 1,
         pinned,
         store,
+        portInUse: noPortInUse,
         probe,
       });
       expect(leases.byProject.android![0]!.udid).toBe('emulator-5556');
@@ -311,6 +344,7 @@ describe('leaseRunDevices with --device', () => {
       workers: 1,
       pinned: 'emulator-5560',
       store,
+      portInUse: noPortInUse,
       probe,
     }).catch((e) => e);
     expect(error).toBeInstanceOf(DeviceSelectionError);
@@ -326,6 +360,7 @@ describe('leaseRunDevices with --device', () => {
       pinned: 'emulator-5554',
       waitSeconds: 60,
       store,
+      portInUse: noPortInUse,
       probe: probeFrom({
         'emulator-5554': unavailable('unauthorized: accept the USB debugging prompt'),
       }),
@@ -341,6 +376,7 @@ describe('leaseRunDevices with --device', () => {
       workers: 1,
       pinned: 'emulator-5554',
       store,
+      portInUse: noPortInUse,
       probe: probeFrom({ 'emulator-5554': unavailable('adb reports it as "offline"') }),
     }).catch((e) => e);
     expect(error.message).toContain('is in use by run "nightly"');
@@ -354,6 +390,7 @@ describe('leaseRunDevices with --device', () => {
       workers: 1,
       pinned: 'emulator-5554',
       store,
+      portInUse: noPortInUse,
       probe,
     }).catch((e) => e);
     expect(error.message).toContain('is in use by run "nightly"');
@@ -371,6 +408,7 @@ describe('leaseRunDevices with --device', () => {
         workers: 2,
         pinned: 'emulator-5554',
         store,
+        portInUse: noPortInUse,
         probe: probeNever,
       }),
     ).rejects.toThrow(/Pass --workers 1/);
@@ -380,6 +418,7 @@ describe('leaseRunDevices with --device', () => {
         workers: 1,
         pinned: 'emulator-5554',
         store,
+        portInUse: noPortInUse,
         probe: probeNever,
       }),
     ).rejects.toThrow(/2 local projects are selected/);
@@ -389,6 +428,7 @@ describe('leaseRunDevices with --device', () => {
         workers: 1,
         pinned: 'emulator-5554',
         store,
+        portInUse: noPortInUse,
         probe: probeNever,
       }),
     ).rejects.toThrow(/needs a device pool/);
