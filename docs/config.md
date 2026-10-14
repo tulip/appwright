@@ -100,6 +100,31 @@ Specifies a custom WebDriverAgent bundle ID to use. This is useful when you've b
 }
 ```
 
+### Extra Appium Capabilities
+
+#### capabilities (optional, `local-device` only)
+
+Appium capabilities added to every session of the project. They are applied after Appwright's
+own, so a key set here replaces Appwright's value for it (for example `appium:derivedDataPath`).
+
+**Example:** launch a WebDriverAgent already installed on the device instead of building it with
+`xcodebuild` each session (iOS 17 or later):
+
+```typescript
+{
+  name: "ios-preinstalled-wda",
+  use: {
+    platform: Platform.IOS,
+    device: {
+      provider: "local-device",
+      updatedWDABundleId: "co.company.WebDriverAgentRunner",
+      capabilities: { "appium:usePreinstalledWDA": true },
+    },
+    buildPath: "MyApp.ipa",
+  },
+}
+```
+
 ### Complete Configuration Example
 
 ```typescript

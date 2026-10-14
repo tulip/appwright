@@ -566,6 +566,21 @@ export type LocalDeviceConfig = {
    * ```
    */
   updatedWDABundleId?: string;
+
+  /**
+   * Extra Appium capabilities for this project's sessions, applied after Appwright's own, so a
+   * key set here replaces Appwright's value for it.
+   *
+   * @example
+   * ```typescript
+   * device: {
+   *   provider: 'local-device',
+   *   updatedWDABundleId: 'co.tulip.WebDriverAgentRunner',
+   *   capabilities: { 'appium:usePreinstalledWDA': true },
+   * }
+   * ```
+   */
+  capabilities?: Record<string, unknown>;
 } & AppResetConfig;
 
 /**

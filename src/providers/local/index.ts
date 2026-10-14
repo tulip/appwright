@@ -154,6 +154,8 @@ To specify a device, use the udid property. Run "adb devices" to get the UDID fo
         ...(platformName == Platform.ANDROID && {
           'appium:extractChromeAndroidPackageFromContextName': true,
         }),
+
+        ...deviceConfig.capabilities,
       },
     };
   }
