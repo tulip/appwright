@@ -1,3 +1,5 @@
+import net from 'net';
+
 import { logger } from '../logger';
 import { DeviceEntry, LeasedDevice } from '../types';
 import { Availability, DeviceKind, probeAvailability } from './availability';
@@ -10,6 +12,7 @@ import {
   LeaseStore,
   portSlotLeaseKey,
 } from './leases';
+import { MAX_PORT_SLOTS, portsForSlot } from './slots';
 
 /** Pins a run to one device by udid or name. Set by `appwright test --device <udid|name>`. */
 export const DEVICE_ENV = 'APPWRIGHT_DEVICE';
@@ -18,10 +21,38 @@ export const WAIT_FOR_DEVICE_ENV = 'APPWRIGHT_WAIT_FOR_DEVICE';
 /** JSON `{ [project]: LeasedDevice[] }` through which globalSetup hands leases to the workers. */
 export const LEASED_DEVICES_ENV = 'APPWRIGHT_LEASED_DEVICES';
 
-/** Port slots available on one host; slot `n` maps to ports `base + n` (see `getSlotCapabilities`). */
-export const MAX_PORT_SLOTS = 100;
-
 const WAIT_POLL_MS = 2000;
+const PORT_PROBE_TIMEOUT_MS = 500;
+
+/** `true` when something accepts connections on `127.0.0.1:port`. */
+export function isPortInUse(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = net.connect({ host: '127.0.0.1', port });
+    socket.setTimeout(PORT_PROBE_TIMEOUT_MS);
+    socket.once('connect', () => {
+      socket.destroy();
+      resolve(true);
+    });
+    socket.once('timeout', () => {
+      socket.destroy();
+      resolve(true);
+    });
+    socket.once('error', (error: NodeJS.ErrnoException) => {
+      resolve(error.code !== 'ECONNREFUSED');
+    });
+  });
+}
+
+/** Port slots with at least one port that another program already listens on. */
+export async function findBusyPortSlots(
+  inUse: (port: number) => Promise<boolean> = isPortInUse,
+): Promise<Set<number>> {
+  const slots = Array.from({ length: MAX_PORT_SLOTS }, (_, slot) => slot);
+  const busy = await Promise.all(
+    slots.map(async (slot) => (await Promise.all(portsForSlot(slot).map(inUse))).some(Boolean)),
+  );
+  return new Set(slots.filter((slot) => busy[slot]));
+}
 
 /** One selected local project, as globalSetup sees it. */
 export type PoolProject = {
@@ -215,6 +246,7 @@ export async function leaseRunDevices(
     waitSeconds?: number;
     store?: LeaseStore;
     probe?: (kind: DeviceKind, entries: DeviceEntry[]) => Promise<Map<string, Availability>>;
+    portInUse?: (port: number) => Promise<boolean>;
     sleep?: (ms: number) => Promise<void>;
   },
 ): Promise<RunLeases> {
@@ -262,8 +294,9 @@ export async function leaseRunDevices(
     for (const project of projects) {
       availability.set(project.name, await probe(project.kind, project.pool));
     }
+    const busyPortSlots = await findBusyPortSlots(options.portInUse);
     try {
-      return acquire(store, projects, availability, options.runName, pinned);
+      return acquire(store, projects, availability, busyPortSlots, options.runName, pinned);
     } catch (error) {
       if (!(error instanceof DeviceSelectionError) || !error.retriable || Date.now() >= deadline) {
         throw error;
@@ -284,6 +317,7 @@ function acquire(
   store: LeaseStore,
   projects: PoolProject[],
   availability: Map<string, Map<string, Availability>>,
+  busyPortSlots: Set<number>,
   runName: string,
   pinned: string | undefined,
 ): RunLeases {
@@ -300,12 +334,13 @@ function acquire(
     const nextPortSlot = (): number => {
       for (let slot = 0; slot < MAX_PORT_SLOTS; slot++) {
         const key = portSlotLeaseKey(slot);
-        if (!takenBy.has(key) && !store.read(key)) {
+        if (!busyPortSlots.has(slot) && !takenBy.has(key) && !store.read(key)) {
           return slot;
         }
       }
       throw new DeviceSelectionError(
-        `All ${MAX_PORT_SLOTS} Appium port slots on this host are leased by other runs.`,
+        `All ${MAX_PORT_SLOTS} Appium port slots on this host are leased by other runs or ` +
+          'have ports another program listens on.',
         true,
       );
     };
