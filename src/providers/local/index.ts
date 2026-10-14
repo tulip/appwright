@@ -18,7 +18,12 @@ import {
   isAppiumHealthy,
 } from '../appium';
 import { getLeasedDeviceForSlot } from '../device-pool';
-import { getAppiumPort, getSlotCapabilities } from '../slots';
+import {
+  getAppiumPort,
+  getSlotCapabilities,
+  LOCAL_COMMAND_TIMEOUT_MS,
+  LOCAL_SESSION_TIMEOUT_MS,
+} from '../slots';
 
 export class LocalDeviceProvider implements DeviceProvider {
   sessionId?: string;
@@ -66,6 +71,7 @@ export class LocalDeviceProvider implements DeviceProvider {
     }
     const WebDriver = (await import('webdriver')).default;
     const webDriverClient = await WebDriver.newSession(config);
+    webDriverClient.options.connectionRetryTimeout = LOCAL_COMMAND_TIMEOUT_MS;
     this.sessionId = webDriverClient.sessionId;
 
     let bundleId: string;
@@ -120,6 +126,7 @@ To specify a device, use the udid property. Run "adb devices" to get the UDID fo
     }
     return {
       port: getAppiumPort(),
+      connectionRetryTimeout: LOCAL_SESSION_TIMEOUT_MS,
       capabilities: {
         'appium:deviceName': this.project.use.device?.name,
         'appium:udid': udid,
@@ -139,7 +146,7 @@ To specify a device, use the udid property. Run "adb devices" to get the UDID fo
         'appium:newCommandTimeout': 300,
 
         // Ports/paths that must be unique per concurrent session on this host.
-        ...getSlotCapabilities(platformName, leased.portSlot, udid),
+        ...getSlotCapabilities(platformName, leased.portSlot),
 
         ...(platformName == Platform.IOS && {
           'appium:wdaLaunchTimeout': 600_000,

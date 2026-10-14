@@ -17,17 +17,17 @@ describe('getSlotCapabilities', () => {
   });
 
   test('android: chromedriverPort and mjpegServerPort are left unset', () => {
-    const caps = getSlotCapabilities(Platform.ANDROID, 1, 'emulator-5556');
+    const caps = getSlotCapabilities(Platform.ANDROID, 1);
     expect(caps).not.toHaveProperty('appium:chromedriverPort');
     expect(caps).not.toHaveProperty('appium:mjpegServerPort');
     expect(Object.keys(caps)).toEqual(['appium:systemPort']);
   });
 
-  test('ios: wdaLocalPort and mjpegServerPort from the port slot, derivedDataPath per device', () => {
-    const caps = getSlotCapabilities(Platform.IOS, 2, '00008103-000C68A83413401E');
+  test('ios: wdaLocalPort, mjpegServerPort and derivedDataPath from the port slot', () => {
+    const caps = getSlotCapabilities(Platform.IOS, 2);
     expect(caps['appium:wdaLocalPort']).toBe(8102);
     expect(caps['appium:mjpegServerPort']).toBe(9102);
-    expect(String(caps['appium:derivedDataPath'])).toContain('device-00008103-000C68A83413401E');
+    expect(String(caps['appium:derivedDataPath'])).toMatch(/appwright-wda[\\/]slot-2$/);
     expect(Object.keys(caps).sort()).toEqual([
       'appium:derivedDataPath',
       'appium:mjpegServerPort',
@@ -35,15 +35,9 @@ describe('getSlotCapabilities', () => {
     ]);
   });
 
-  test('ios: a legacy auto-picked device falls back to a per-slot derivedDataPath', () => {
-    expect(String(getSlotCapabilities(Platform.IOS, 4)['appium:derivedDataPath'])).toContain(
-      'slot-4',
-    );
-  });
-
   test('ios: two port slots get distinct values for every capability', () => {
-    const slot0 = getSlotCapabilities(Platform.IOS, 0, 'A');
-    const slot1 = getSlotCapabilities(Platform.IOS, 1, 'B');
+    const slot0 = getSlotCapabilities(Platform.IOS, 0);
+    const slot1 = getSlotCapabilities(Platform.IOS, 1);
     expect(slot0['appium:wdaLocalPort']).toBe(8100);
     expect(slot1['appium:wdaLocalPort']).toBe(8101);
     expect(slot0['appium:mjpegServerPort']).toBe(9100);
@@ -52,7 +46,7 @@ describe('getSlotCapabilities', () => {
   });
 
   test('ios: the last slot stays below the next range', () => {
-    const caps = getSlotCapabilities(Platform.IOS, 99, 'A');
+    const caps = getSlotCapabilities(Platform.IOS, 99);
     expect(caps['appium:wdaLocalPort']).toBe(8199);
     expect(getSlotCapabilities(Platform.ANDROID, 0)['appium:systemPort']).toBe(8200);
   });
