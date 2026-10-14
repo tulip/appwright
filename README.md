@@ -142,6 +142,35 @@ To run on several local devices or emulators at once, list them under `device.de
 project config and raise `workers` up to that number; each Playwright worker then drives its own
 device. See [Running on multiple local devices](docs/config.md#running-on-multiple-local-devices).
 
+#### Device pools and concurrent runs
+
+`device.devices` is the project's device pool. Each run leases the devices it uses from the pool,
+so two runs started side by side on one machine get different devices, and neither shuts down a
+device the other is using. If every device in the pool is busy, the run fails straight away and
+says which run holds each one.
+
+```ts
+device: {
+  provider: 'emulator',
+  devices: [
+    { udid: 'emulator-5554', avd: 'Pixel_8_API_35' },
+    { udid: 'emulator-5556', avd: 'Pixel_8a_API_35' }, // one AVD per entry
+  ],
+},
+```
+
+Pin a run to one device of the pool with `--device <udid|name>` (or `APPWRIGHT_DEVICE`). The run
+exits with an error before anything boots if that device is not in the pool, not connected or
+bootable, or in use by another run. Add `--wait-for-device <seconds>` to wait for a busy device.
+
+```sh
+npx appwright test --project android --device emulator-5556
+npx appwright test --project ios-local --device "QA iPhone" --wait-for-device 600
+```
+
+Configs without `udid`/`devices` keep picking a device automatically, but such runs cannot reserve
+it. See [Concurrent runs and device leases](docs/config.md#concurrent-runs-and-device-leases).
+
 Every run writes its results into its own folders, `test-results/<run>` and
 `playwright-report/<run>`, so runs started side by side do not overwrite each other. Name a run
 with `--run-name`; without it the folder is called `<project>-<YYYYMMDD>-<HHmmss>-<4 random chars>`.

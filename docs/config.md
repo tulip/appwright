@@ -169,9 +169,11 @@ xcrun simctl list
 
 ## Running on multiple local devices
 
-Appwright runs one Playwright worker per device: every worker (`parallelIndex` 0, 1, 2, ...) opens
-its own Appium session on the device with the same index in the project's `device.devices` list.
-This works for both `provider: "local-device"` and `provider: "emulator"`.
+A project's `device.devices` list is its device pool. Every `appwright test` run leases the devices
+it uses from the pool, one per Playwright worker, so several runs on one machine never drive the
+same device (see [Concurrent runs and device leases](#concurrent-runs-and-device-leases)). Worker
+slot `n` (`parallelIndex` 0, 1, 2, ...) opens its Appium session on the `n`-th device the run
+leased. This works for both `provider: "local-device"` and `provider: "emulator"`.
 
 Each entry in `devices` has:
 
@@ -183,31 +185,38 @@ Each entry in `devices` has:
 - `avd` (optional, `emulator` provider, Android only): the AVD name from
   `$ANDROID_HOME/emulator/emulator -list-avds`. Appwright boots this AVD on the port taken from
   `udid` when that emulator is not already running.
+- `name` (optional): a label you can pass to `--device` instead of the udid.
 
 A single `udid` on the device config is still accepted and is shorthand for
 `devices: [{ udid }]`. Leaving both out keeps the old behaviour of picking the only connected
-device, but then only one worker can run.
+device, but then only one worker can run, and the device cannot be leased: two concurrent runs of
+such a project may drive the same device. Appwright logs a warning when this happens.
 
 Rules to keep in mind:
 
 - `workers` must not exceed the number of entries in `devices`. When `devices` is listed,
   Appwright checks this in global setup and fails fast with a message telling you to add devices
-  or lower `workers`, before any session is opened. Configs that use the single-`udid` shorthand
+  or lower `workers`, before any session is opened. A pool may be larger than `workers`: the run
+  leases the first free devices in pool order and leaves the rest for other runs. Configs that use the single-`udid` shorthand
   (or neither) are left to the old behaviour: they keep running as long as Playwright spawns one
   worker, and the second worker fails when it asks for a device it has not been given.
 - The worker slot is Playwright's `parallelIndex`, not `workerIndex`. When Playwright restarts a
   worker after a failure the new worker reuses the same `parallelIndex`, so a retried test runs on
-  the same device as the original attempt.
+  the same device as the original attempt. Leases belong to the run, not the worker, so the
+  device stays reserved while the worker restarts.
 - One Appium server is started per run on a free port (4723 if available, otherwise the next free
   one) and shut down when the run ends. If the port is grabbed by another process between the
   check and the start, Appwright retries once on a fresh port. Workers only create and delete sessions on it; Appium is no
   longer restarted after every test. The Appium driver is installed once, and skipped if it is
   already installed.
 - Ports that must be unique per concurrent session on one host (`systemPort` on Android;
-  `wdaLocalPort`, `mjpegServerPort` and `derivedDataPath` on iOS) are derived from the worker slot
-  automatically, so you do not need to set them.
+  `wdaLocalPort` and `mjpegServerPort` on iOS) come from a port slot that is leased together with
+  the device, so they never collide across workers, projects or concurrent runs, and you do not
+  need to set them. Slot `n` uses `8200 + n`, `8100 + n` and `9100 + n`; there are 100 slots.
+  `derivedDataPath` (WebDriverAgent build output) is kept per device udid.
 - Emulators and simulators that Appwright booted for the run are shut down at the end. Emulators
-  and simulators that were already running when the run started are left alone.
+  and simulators that were already running when the run started are left alone, and physical
+  devices are never shut down.
 - iOS simulators listed by `udid` are booted with `xcrun simctl` if they are not already booted.
 
 ### Example: two Android emulators
@@ -242,6 +251,9 @@ only allows this when all instances of that AVD run with `-read-only`, so Appwri
 to every instance of a shared AVD (their disk changes are discarded on shutdown). An
 entry without `avd` that is not already running boots the first installed AVD, with a warning.
 
+A run leases the AVD along with the udid, so a shared AVD can back several entries of one run but
+not two concurrent runs. Give every entry its own AVD when you want to run concurrently.
+
 ### Example: two iOS physical devices
 
 ```typescript
@@ -269,8 +281,64 @@ export default defineConfig({
 });
 ```
 
-Find the UDIDs with `xcrun xctrace list devices`. Both devices must be connected and trusted before
-the run starts; Appwright does not boot or pair physical devices.
+Find the UDIDs with `xcrun xctrace list devices` or `xcrun devicectl list devices`. Both devices
+must be connected and trusted before the run starts; Appwright does not boot or pair physical
+devices.
+
+## Concurrent runs and device leases
+
+Several `appwright test` runs can share one machine, for example two terminals running the same
+project, or an iOS and an Android run side by side. Before anything boots or Appium starts, global
+setup leases the devices the run will use from each selected project's pool:
+
+1. It checks which pool entries are usable right now (see the table below).
+2. Under a host-wide lock it skips entries another run has leased, takes the first free usable
+   entries (one per worker), and records a lease for each: the udid, the AVD for Android
+   emulators, and a port slot. A lease records the run name, project, pid, start time and working
+   directory.
+3. Workers get the leased devices from global setup; worker slot `n` drives the `n`-th one.
+4. At the end of the run, after Appium has stopped and the emulators/simulators this run booted
+   have shut down, the leases are released. They are also released when global setup fails, on
+   SIGTERM/SIGHUP, and when the process exits. A lease whose process is no longer alive (for
+   example after `kill -9`) is stale, and the next run reclaims it.
+
+If the pool has too few free devices, the run fails at once with a list of every pool entry and why
+it cannot be used, including which run holds it. Pass `--wait-for-device <seconds>` to wait for a
+busy device to be released instead.
+
+| Device                    | Usable when                                                                     |
+| ------------------------- | ------------------------------------------------------------------------------- |
+| Android emulator          | `adb devices` lists it as `device`, or it is not running and its `avd` (or the first installed AVD) exists |
+| Android physical device   | `adb devices` lists it as `device`; `unauthorized` and `offline` are reported as such |
+| iOS simulator             | `xcrun simctl list devices` has it, available, `Booted` or `Shutdown`           |
+| iOS physical device       | `xcrun devicectl list devices` shows it paired and reachable (falls back to `xcrun xctrace list devices`) |
+
+Leases are files under `$TMPDIR/appwright-leases` (set `APPWRIGHT_LEASE_DIR` to use another
+directory). Deleting a lease file by hand releases that device.
+
+### Choosing a device: `--device`
+
+Pin a run to one device of the pool by udid or name:
+
+```sh
+npx appwright test --project android --device emulator-5556
+npx appwright test --project ios --device "iPhone 17 Pro"
+APPWRIGHT_DEVICE=emulator-5556 npx appwright test --project android
+```
+
+`--device` matches the entry's `udid`, its `name`, its `avd`, or the name the platform reports
+(simulator name, iOS device name, Android model), ignoring case and treating `_` like a space. It
+is handled by the appwright CLI and not passed on to Playwright. The run fails before anything
+boots, with a non-zero exit code, when:
+
+- the device is not in the selected project's pool (the error lists the pool),
+- it is not usable (not connected, unauthorized, missing runtime or AVD, ...),
+- another run holds it (the error names the run; add `--wait-for-device <seconds>` to wait),
+- the name matches more than one entry (pass the udid instead),
+- more than one local project is selected, or `workers` is above 1 (pass `--workers 1`).
+
+`--wait-for-device <seconds>` (or `APPWRIGHT_WAIT_FOR_DEVICE`) also works without `--device`: the
+run waits for enough pool devices to become free.
 
 ## Test results per run
 
