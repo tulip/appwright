@@ -2,7 +2,6 @@ import os from 'os';
 import path from 'path';
 
 import { DeviceEntry, EmulatorConfig, LocalDeviceConfig, Platform } from '../types';
-import { MAX_PORT_SLOTS } from './device-pool';
 
 /**
  * Environment variable through which globalSetup tells worker processes which port the
@@ -13,6 +12,27 @@ export const APPIUM_PORT_ENV = 'APPWRIGHT_APPIUM_PORT';
 const ANDROID_SYSTEM_PORT_BASE = 8200;
 const IOS_WDA_LOCAL_PORT_BASE = 8100;
 const IOS_MJPEG_SERVER_PORT_BASE = 9100;
+
+/**
+ * Webdriver client timeout for creating a local session. Matches `appium:wdaLaunchTimeout`:
+ * session creation can build WebDriverAgent, which takes minutes when several runs build at once,
+ * and the client's 120 s default gives up before the server does.
+ */
+export const LOCAL_SESSION_TIMEOUT_MS = 600_000;
+/** Webdriver client timeout for every command after the session exists (the client default). */
+export const LOCAL_COMMAND_TIMEOUT_MS = 120_000;
+
+/** Port slots available on one host; slot `n` maps to the ports in {@link portsForSlot}. */
+export const MAX_PORT_SLOTS = 100;
+
+/** Every host port a port slot can use, on either platform. */
+export function portsForSlot(portSlot: number): number[] {
+  return [
+    ANDROID_SYSTEM_PORT_BASE + portSlot,
+    IOS_WDA_LOCAL_PORT_BASE + portSlot,
+    IOS_MJPEG_SERVER_PORT_BASE + portSlot,
+  ];
+}
 
 const EMULATOR_UDID_PATTERN = /^emulator-(\d+)$/;
 const EMULATOR_MIN_PORT = 5554;
@@ -29,19 +49,18 @@ type SlotDeviceConfig = Pick<LocalDeviceConfig | EmulatorConfig, 'udid' | 'devic
  *   and skips the MJPEG forward when the capability is absent.
  * - iOS: `appium:wdaLocalPort` (WDA forward; on real devices the driver forwards it to port 8100 on
  *   that device), `appium:mjpegServerPort` (XCUITest binds it on every session, so it must be
- *   unique once set) and `appium:derivedDataPath` (per-device WDA build products, as recommended
- *   by the XCUITest parallel-tests guide).
+ *   unique once set) and `appium:derivedDataPath` (WDA build products, one folder per concurrent
+ *   session as recommended by the XCUITest parallel-tests guide; keyed by port slot rather than
+ *   device so a warm WDA build is reused by whichever device takes the slot next).
  *
  * Ports come from the host-wide port slot leased with the device, not from the worker slot or the
  * device's position in its pool, so two concurrent runs (or two projects of one platform) never
- * get the same ports. They are not probed: the bases are the driver defaults and slots stop at
- * `MAX_PORT_SLOTS`, so the ranges are assumed free on the host. If something else holds one,
- * session creation fails inside the driver.
+ * get the same ports. The bases are the driver defaults; slots whose ports another program already
+ * listens on are skipped when the slot is leased.
  */
 export function getSlotCapabilities(
   platform: Platform,
   portSlot: number,
-  udid?: string,
 ): Record<string, string | number> {
   if (!Number.isInteger(portSlot) || portSlot < 0 || portSlot >= MAX_PORT_SLOTS) {
     throw new Error(
@@ -53,11 +72,10 @@ export function getSlotCapabilities(
       'appium:systemPort': ANDROID_SYSTEM_PORT_BASE + portSlot,
     };
   }
-  const derivedDataDir = udid ? `device-${udid.replace(/[^A-Za-z0-9._-]+/g, '_')}` : `slot-${portSlot}`;
   return {
     'appium:wdaLocalPort': IOS_WDA_LOCAL_PORT_BASE + portSlot,
     'appium:mjpegServerPort': IOS_MJPEG_SERVER_PORT_BASE + portSlot,
-    'appium:derivedDataPath': path.join(os.tmpdir(), 'appwright-wda', derivedDataDir),
+    'appium:derivedDataPath': path.join(os.tmpdir(), 'appwright-wda', `slot-${portSlot}`),
   };
 }
 

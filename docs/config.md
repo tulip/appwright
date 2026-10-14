@@ -269,8 +269,10 @@ Rules to keep in mind:
 - Ports that must be unique per concurrent session on one host (`systemPort` on Android;
   `wdaLocalPort` and `mjpegServerPort` on iOS) come from a port slot that is leased together with
   the device, so they never collide across workers, projects or concurrent runs, and you do not
-  need to set them. Slot `n` uses `8200 + n`, `8100 + n` and `9100 + n`; there are 100 slots.
-  `derivedDataPath` (WebDriverAgent build output) is kept per device udid.
+  need to set them. Slot `n` uses `8200 + n`, `8100 + n` and `9100 + n`; there are 100 slots,
+  and a slot with a port that another program already listens on is skipped.
+  `derivedDataPath` (WebDriverAgent build output) is `$TMPDIR/appwright-wda/slot-<n>`, so a WDA
+  build is reused by whichever device takes the slot next.
 - Emulators and simulators that Appwright booted for the run are shut down at the end. Emulators
   and simulators that were already running when the run started are left alone, and physical
   devices are never shut down.
