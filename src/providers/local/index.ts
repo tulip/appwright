@@ -17,12 +17,8 @@ import {
   getConnectedIOSDeviceUDID,
   isAppiumHealthy,
 } from '../appium';
-import {
-  getAppiumPort,
-  getDeviceEntryForSlot,
-  getSlotCapabilities,
-  mergeCapabilities,
-} from '../slots';
+import { getLeasedDeviceForSlot } from '../device-pool';
+import { getAppiumPort, getSlotCapabilities, mergeCapabilities } from '../slots';
 
 export class LocalDeviceProvider implements DeviceProvider {
   sessionId?: string;
@@ -105,13 +101,11 @@ export class LocalDeviceProvider implements DeviceProvider {
       this.cachedPackageName = packageName;
     }
 
-    // Device for this worker slot. `undefined` only when nothing is configured and slot is 0
+    // Device this run leased for the worker slot. `udid` is unset only when nothing is configured
     // (legacy behaviour: auto-pick a connected device).
-    const entry = getDeviceEntryForSlot(deviceConfig, this.slot);
-    let udid: string | undefined;
-    if (entry) {
-      udid = entry.udid;
-    } else {
+    const leased = getLeasedDeviceForSlot(this.project.name, this.slot);
+    let udid = leased.udid;
+    if (!udid) {
       if (platformName == Platform.IOS) {
         udid = await getConnectedIOSDeviceUDID(this.project.use.device?.name);
       } else {
@@ -146,7 +140,7 @@ To specify a device, use the udid property. Run "adb devices" to get the UDID fo
           'appium:newCommandTimeout': 300,
 
           // Ports/paths that must be unique per concurrent session on this host.
-          ...getSlotCapabilities(platformName, this.slot),
+          ...getSlotCapabilities(platformName, leased.portSlot, udid),
 
           ...(platformName == Platform.IOS && {
             'appium:wdaLaunchTimeout': 600_000,
