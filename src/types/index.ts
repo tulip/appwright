@@ -8,6 +8,19 @@ export type ActionOptions = {
   timeout: number;
 };
 
+export type TapOptions = Partial<ActionOptions> & {
+  /**
+   * Skip the actionability checks: tap as soon as the element exists, even if it is hidden or
+   * disabled. Same as Playwright's and Cypress's `force`.
+   */
+  force?: boolean;
+  /**
+   * Run the actionability checks without tapping, like Playwright's `trial`. Resolves once the
+   * element is visible and enabled, and throws the same error a real tap would.
+   */
+  trial?: boolean;
+};
+
 export type FillOptions = Partial<ActionOptions> & {
   /**
    * Treat the value as a secret: the Playwright step title shows `***` instead of the value,
@@ -371,10 +384,15 @@ export enum ScrollDirection {
 
 export interface AppwrightLocator {
   /**
-   * Taps (clicks) on the element. Waits, within the timeout, for the element to be visible and
-   * enabled before clicking it: a disabled control accepts the click and ignores it. When the
-   * element is still disabled at the timeout this throws `Element "…" is visible but disabled`
-   * rather than the "not visible" error.
+   * Taps (clicks) on the element. Like Playwright's actionability checks, it first waits within
+   * the timeout for the element to be visible and enabled (see `waitFor('enabled')` for what
+   * counts as disabled), because a disabled control accepts a click and ignores it. When the
+   * element is still disabled at the timeout this throws `Element "…" is visible but disabled`.
+   * If the driver refuses the tap because the element went stale or is covered, the checks run
+   * again within what is left of the timeout.
+   *
+   * Pass `force: true` to tap as soon as the element exists, skipping the checks, or `trial: true`
+   * to run the checks without tapping.
    *
    * **Usage:**
    * ```js
@@ -383,7 +401,7 @@ export interface AppwrightLocator {
    *
    * @param options Use this to override the timeout for this action
    */
-  tap(options?: ActionOptions): Promise<void>;
+  tap(options?: TapOptions): Promise<void>;
 
   /**
    * Fills the input element with the given value. This method waits for the element to be visible before filling it.
@@ -462,8 +480,11 @@ export interface AppwrightLocator {
    * does not count as gone.
    *
    * `'enabled'` and `'disabled'` also require the element to be visible. A native element's state
-   * is WebDriver's `enabled`; in a WebView an element is disabled when it or an ancestor is
-   * `:disabled` (e.g. `<button disabled>`) or has `aria-disabled="true"`.
+   * is WebDriver's `enabled`. In a WebView, Playwright's rules apply: an element that is not a form
+   * field is first retargeted to its closest button-like ancestor (so the `<span>` a text locator
+   * finds inside a `<button>` reads the button's state). It is then disabled when it is a natively
+   * `:disabled` control (including inside a disabled `<fieldset>`), or when the nearest
+   * `aria-disabled` on it or an ancestor is `"true"`.
    *
    * **Usage:**
    * ```js
@@ -532,6 +553,8 @@ export interface AppwrightLocator {
 
 export enum WebDriverErrors {
   StaleElementReferenceError = 'stale element reference',
+  ElementClickInterceptedError = 'element click intercepted',
+  ElementNotInteractableError = 'element not interactable',
 }
 
 export type ElementReferenceId = typeof ELEMENT_REFERENCE_ID;
