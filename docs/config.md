@@ -100,6 +100,63 @@ Specifies a custom WebDriverAgent bundle ID to use. This is useful when you've b
 }
 ```
 
+#### xcodeOrgId / xcodeSigningId (optional, iOS only)
+
+Sign WebDriverAgent for a physical iOS device using the
+[XCUITest driver's automatic configuration](https://appium.github.io/appium-xcuitest-driver/latest/getting-started/provisioning-profile/auto-config/).
+They map to `appium:xcodeOrgId` (your Apple Developer Team ID) and `appium:xcodeSigningId`
+(defaults to `"Apple Development"` in the driver). Simulators don't need signing.
+
+These values usually differ per developer, so keep them out of the config file and load them from a
+gitignored `.env`. Unset values are not sent to Appium, so the same config also works on machines
+without them.
+
+```typescript
+import "dotenv/config"; // or process.loadEnvFile() on Node >= 20.12
+
+export default defineConfig({
+  projects: [
+    {
+      name: "ios-device",
+      use: {
+        platform: Platform.IOS,
+        device: {
+          provider: "local-device",
+          xcodeOrgId: process.env.XCODE_ORG_ID,
+          xcodeSigningId: process.env.XCODE_SIGNING_ID,
+          updatedWDABundleId: process.env.UPDATED_WDA_BUNDLE_ID,
+        },
+        buildPath: "MyApp.ipa",
+      },
+    },
+  ],
+});
+```
+
+```sh
+# .env
+XCODE_ORG_ID=ABCDE12345
+UPDATED_WDA_BUNDLE_ID=co.company.WebDriverAgentRunner
+```
+
+### Extra Appium capabilities
+
+#### capabilities (optional, `local-device` and `emulator`)
+
+Any other Appium capabilities, merged over the ones appwright builds so a value here wins. Keys
+without a vendor prefix get `appium:` unless they are W3C capabilities (`platformName`, `timeouts`,
+…).
+
+```typescript
+device: {
+  provider: "local-device",
+  capabilities: {
+    showXcodeLog: true,                        // sent as appium:showXcodeLog
+    allowProvisioningDeviceRegistration: true, // sent as appium:allowProvisioningDeviceRegistration
+  },
+}
+```
+
 ### Complete Configuration Example
 
 ```typescript
