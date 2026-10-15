@@ -1,4 +1,3 @@
-import retry from 'async-retry';
 // @ts-ignore ts not able to identify the import is just an interface
 import { Client as WebDriverClient } from 'webdriver';
 
@@ -13,12 +12,13 @@ import {
   Rect,
   RoleOptions,
   ScrollDirection,
+  TapOptions,
   TextOptions,
   TimeoutOptions,
   WebDriverErrors,
 } from '../types';
 import { NonRetryableError, RetryableError, TimeoutError } from '../types/errors';
-import { boxedStep, isNoSuchWindowError } from '../utils';
+import { boxedStep, delay, isNoSuchWindowError } from '../utils';
 import {
   LocatorQuery,
   nativeIdQuery,
@@ -49,18 +49,34 @@ const WEB_VALUE_SCRIPT =
   'var el = arguments[0]; return el && el.value != null ? String(el.value) : "";';
 
 /**
- * Whether a DOM element is enabled: neither it nor an ancestor is `:disabled` or
- * `aria-disabled="true"`. Ancestors count because text locators resolve to the innermost match,
- * which is often a `<span>` inside the `<button>` that carries the state. A `<fieldset>` is
- * skipped as an ancestor: the controls inside a disabled one match `:disabled` themselves.
+ * Whether a DOM element is enabled, following Playwright's rules. Anything other than a form
+ * field is first retargeted to the closest button-like ancestor, because text locators resolve
+ * to the innermost match, often a `<span>` inside the `<button>` that carries the state. The
+ * target is disabled when it is a natively `:disabled` control (which covers a disabled
+ * `<fieldset>` or `<optgroup>`), or when the nearest `aria-disabled` on it or an ancestor is
+ * `"true"`.
  */
 const WEB_ENABLED_SCRIPT = `
-  for (var n = arguments[0]; n && n.nodeType === 1; n = n.parentElement) {
-    if (n.getAttribute('aria-disabled') === 'true') { return false; }
-    if (n.tagName !== 'FIELDSET' && n.matches && n.matches(':disabled')) { return false; }
+  var el = arguments[0];
+  if (!/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName) && !el.isContentEditable) {
+    el = el.closest('button, [role=button], [role=checkbox], [role=radio]') || el;
+  }
+  if (/^(BUTTON|INPUT|SELECT|TEXTAREA|OPTION|OPTGROUP)$/.test(el.tagName) && el.matches(':disabled')) {
+    return false;
+  }
+  for (var n = el; n && n.nodeType === 1; n = n.parentElement) {
+    var aria = n.getAttribute('aria-disabled');
+    if (aria === 'true') { return false; }
+    if (aria === 'false') { return true; }
   }
   return true;
 `;
+
+/**
+ * Waits between polls after the first, immediate one; the last value repeats. A poll costs one or
+ * more Appium round trips, so this is coarser than Playwright's 0/20/100/100/500 ms.
+ */
+const POLL_DELAYS_MS = [100, 250, 500, 1000];
 
 /** Named keys `press()` understands; anything else is sent as typed. */
 const KEY_MAP: Record<string, string> = {
@@ -80,12 +96,16 @@ const ANDROID_KEYCODES: Record<string, number> = {
 
 type ElementState = 'attached' | 'visible' | 'hidden' | 'enabled' | 'disabled';
 
-/** What the last poll of `waitForState` saw, used to word the timeout. */
-type ObservedState = 'detached' | 'hidden' | 'visible' | 'enabled' | 'disabled';
+/**
+ * What the last poll saw, used to word a timeout. `'rejected'` means the element passed its checks
+ * but the driver refused the action (stale, intercepted, not interactable).
+ */
+type ObservedState = 'detached' | 'hidden' | 'visible' | 'enabled' | 'disabled' | 'rejected';
 
-type StateResult =
-  | { reached: true; elementId: string | null }
-  | { reached: false; observed: ObservedState };
+/** What an action waits for before it runs: Playwright's actionability checks. */
+type Actionability = 'attached' | 'visible' | 'enabled';
+
+type Probe = { observed: ObservedState; reached: boolean; elementId?: string };
 
 /**
  * Locator methods that build another locator rather than act on the element. They are
@@ -204,103 +224,103 @@ export class Locator {
   async fill(value: string, options?: FillOptions): Promise<void> {
     const secret = options?.secret === true;
     const verify = options?.verify !== false;
-    const actionOptions = this.toActionOptions(options);
-    const elementId = await this.requireVisibleElementId('fill', actionOptions);
+    await this.act('fill', 'visible', options, async (elementId) => {
+      if (!this.isWeb && !this.webDriverClient.isAndroid) {
+        await this.webDriverClient.elementClick(elementId);
+      }
 
-    if (!this.isWeb && !this.webDriverClient.isAndroid) {
-      await this.webDriverClient.elementClick(elementId);
-    }
-
-    if (!verify) {
-      await this.clearElement(elementId);
-      await this.webDriverClient.elementSendKeys(elementId, value);
-      return;
-    }
-
-    let entered = '';
-    for (let attempt = 1; attempt <= 2; attempt += 1) {
-      await this.clearElement(elementId);
-      await this.webDriverClient.elementSendKeys(elementId, value);
-
-      entered = await this.readValue(elementId);
-      if (Locator.valueMatches(entered, value, secret)) {
+      if (!verify) {
+        await this.clearElement(elementId);
+        await this.webDriverClient.elementSendKeys(elementId, value);
         return;
       }
-    }
 
-    const got = secret ? `${entered.length} character(s)` : JSON.stringify(entered);
-    const expected = secret ? `${value.length} character(s)` : JSON.stringify(value);
-    throw new Error(
-      `Failed to fill: Element ${this.named} holds ${got} after filling ${expected}. ` +
-        'If the field reformats what is typed (input mask, maxLength, autocorrect), pass ' +
-        '`{ verify: false }` and assert with inputValue() instead.',
-    );
+      let entered = '';
+      for (let attempt = 1; attempt <= 2; attempt += 1) {
+        await this.clearElement(elementId);
+        await this.webDriverClient.elementSendKeys(elementId, value);
+
+        entered = await this.readValue(elementId);
+        if (Locator.valueMatches(entered, value, secret)) {
+          return;
+        }
+      }
+
+      const got = secret ? `${entered.length} character(s)` : JSON.stringify(entered);
+      const expected = secret ? `${value.length} character(s)` : JSON.stringify(value);
+      throw new Error(
+        `Failed to fill: Element ${this.named} holds ${got} after filling ${expected}. ` +
+          'If the field reformats what is typed (input mask, maxLength, autocorrect), pass ' +
+          '`{ verify: false }` and assert with inputValue() instead.',
+      );
+    });
   }
 
   @boxedStep
   async clear(options?: ActionOptions): Promise<void> {
-    const elementId = await this.requireVisibleElementId('clear', options);
-    await this.clearElement(elementId);
+    await this.act('clear', 'visible', options, (elementId) => this.clearElement(elementId));
   }
 
   @boxedStep
   async press(key: string, options?: ActionOptions): Promise<void> {
-    const elementId = await this.requireVisibleElementId('press', options);
+    await this.act('press', 'visible', options, async (elementId) => {
+      if (this.isWeb || !this.webDriverClient.isAndroid) {
+        // chromedriver and XCUITest both type a "\n" as the Return key without touching the value.
+        await this.webDriverClient.elementSendKeys(elementId, KEY_MAP[key] ?? key);
+        return;
+      }
 
-    if (this.isWeb || !this.webDriverClient.isAndroid) {
-      // chromedriver and XCUITest both type a "\n" as the Return key without touching the value.
-      await this.webDriverClient.elementSendKeys(elementId, KEY_MAP[key] ?? key);
-      return;
-    }
-
-    // Native Android: send key events to the focused field instead of setText (see
-    // ANDROID_KEYCODES). Tapping first puts focus on this element; it does not change the text.
-    await this.webDriverClient.elementClick(elementId);
-    const keycode = ANDROID_KEYCODES[key];
-    if (keycode != null) {
-      await this.webDriverClient.executeScript('mobile: pressKey', [{ keycode }]);
-      return;
-    }
-    await this.webDriverClient.performActions([
-      {
-        type: 'key',
-        id: 'keyboard',
-        actions: key.split('').flatMap((char) => [
-          { type: 'keyDown', value: char },
-          { type: 'keyUp', value: char },
-        ]),
-      },
-    ]);
-    await this.webDriverClient.releaseActions();
+      // Native Android: send key events to the focused field instead of setText (see
+      // ANDROID_KEYCODES). Tapping first puts focus on this element; it does not change the text.
+      await this.webDriverClient.elementClick(elementId);
+      const keycode = ANDROID_KEYCODES[key];
+      if (keycode != null) {
+        await this.webDriverClient.executeScript('mobile: pressKey', [{ keycode }]);
+        return;
+      }
+      await this.webDriverClient.performActions([
+        {
+          type: 'key',
+          id: 'keyboard',
+          actions: key.split('').flatMap((char) => [
+            { type: 'keyDown', value: char },
+            { type: 'keyUp', value: char },
+          ]),
+        },
+      ]);
+      await this.webDriverClient.releaseActions();
+    });
   }
 
   @boxedStep
   async inputValue(options?: ActionOptions): Promise<string> {
-    const elementId = await this.requireVisibleElementId('inputValue', options);
-    return await this.readValue(elementId);
+    return await this.act('inputValue', 'visible', options, (elementId) =>
+      this.readValue(elementId),
+    );
   }
 
   @boxedStep
   async sendKeyStrokes(value: string, options?: ActionOptions): Promise<void> {
-    const elementId = await this.requireVisibleElementId('sendKeyStrokes', options);
-    await this.webDriverClient.elementClick(elementId);
-    const actions = value
-      .split('')
-      .map((char) => [
-        { type: 'keyDown', value: char },
-        { type: 'keyUp', value: char },
-      ])
-      .flat();
+    await this.act('sendKeyStrokes', 'visible', options, async (elementId) => {
+      await this.webDriverClient.elementClick(elementId);
+      const actions = value
+        .split('')
+        .map((char) => [
+          { type: 'keyDown', value: char },
+          { type: 'keyUp', value: char },
+        ])
+        .flat();
 
-    await this.webDriverClient.performActions([
-      {
-        type: 'key',
-        id: 'keyboard',
-        actions: actions,
-      },
-    ]);
+      await this.webDriverClient.performActions([
+        {
+          type: 'key',
+          id: 'keyboard',
+          actions: actions,
+        },
+      ]);
 
-    await this.webDriverClient.releaseActions();
+      await this.webDriverClient.releaseActions();
+    });
   }
 
   async isVisible(options?: ActionOptions): Promise<boolean> {
@@ -320,65 +340,169 @@ export class Locator {
    * when the element does not become visible within the timeout.
    */
   async isEnabled(options?: ActionOptions): Promise<boolean> {
-    const elementId = await this.requireVisibleElementId('isEnabled', options);
-    return await this.readEnabled(elementId);
+    return await this.act('isEnabled', 'visible', options, (elementId) =>
+      this.readEnabled(elementId),
+    );
   }
 
   async waitFor(state: ElementState, options?: ActionOptions): Promise<void> {
     const timeout = this.resolveTimeout(options);
-    const result = await this.waitForState(state, timeout);
-    if (!result.reached) {
-      const what = Locator.describeTimeout(state, result.observed);
+    const observed = await this.waitForState(state, timeout);
+    if (observed !== null) {
+      const what = Locator.describeTimeout(state, observed);
       throw new TimeoutError(`Element ${this.named} ${what} after ${timeout}ms`);
     }
   }
 
   /**
-   * Polls until the element reaches `state`. Once it does, resolves with the reference id of the
-   * element the poll found there (`null` for 'hidden', which nothing need match), so an action can
-   * use it without looking the element up again; when the timeout runs out, with what the last
-   * poll saw. `'enabled'` and `'disabled'` both require the element to be visible. `timeout: 0`
-   * makes a single attempt.
+   * Polls until the element reaches `state`. Resolves `null` once it does, or what the last poll
+   * saw when the timeout runs out. `'enabled'` and `'disabled'` both require the element to be
+   * visible.
    */
-  private async waitForState(state: ElementState, timeout: number): Promise<StateResult> {
-    let observed = 'detached' as ObservedState;
+  private async waitForState(state: ElementState, timeout: number): Promise<ObservedState | null> {
+    let observed: ObservedState = 'detached';
     try {
-      const elementId = await this.waitUntil(async () => {
-        const element = await this.getElement();
-        const elementId = element?.[ELEMENT_REFERENCE_ID];
-
-        if (!elementId) {
-          // Nothing matches: that is exactly 'hidden', and no other state.
-          observed = 'detached';
-          return state === 'hidden' ? null : false;
-        }
-
-        if (state === 'attached') {
-          return elementId;
-        }
-
-        const isDisplayed = await this.retryIfStale(() =>
-          this.webDriverClient.isElementDisplayed(elementId),
-        );
-        observed = isDisplayed ? 'visible' : 'hidden';
-        if (state === 'hidden') {
-          return isDisplayed ? false : null;
-        }
-        if (!isDisplayed || state === 'visible') {
-          return isDisplayed ? elementId : false;
-        }
-
-        const isEnabled = await this.retryIfStale(() => this.readEnabled(elementId));
-        observed = isEnabled ? 'enabled' : 'disabled';
-        return isEnabled === (state === 'enabled') ? elementId : false;
+      await this.waitUntil(async () => {
+        const probe = await this.probe(state);
+        observed = probe.observed;
+        return probe.reached;
       }, timeout);
-      return { reached: true, elementId };
+      return null;
     } catch (error) {
       if (error instanceof TimeoutError) {
-        return { reached: false, observed };
+        return observed;
       }
       throw error;
     }
+  }
+
+  /** One poll: finds the element and reads only as much of its state as `state` needs. */
+  private async probe(state: ElementState): Promise<Probe> {
+    const element = await this.getElement();
+    const elementId = element?.[ELEMENT_REFERENCE_ID];
+
+    if (!elementId) {
+      // Nothing matches: that is exactly 'hidden', and no other state.
+      return { observed: 'detached', reached: state === 'hidden' };
+    }
+    if (state === 'attached') {
+      return { observed: 'visible', reached: true, elementId };
+    }
+
+    const isDisplayed = await this.retryIfStale(() =>
+      this.webDriverClient.isElementDisplayed(elementId),
+    );
+    if (state === 'hidden' || !isDisplayed || state === 'visible') {
+      const reached = state === 'hidden' ? !isDisplayed : isDisplayed;
+      return { observed: isDisplayed ? 'visible' : 'hidden', reached, elementId };
+    }
+
+    const isEnabled = await this.retryIfStale(() => this.readEnabled(elementId));
+    return {
+      observed: isEnabled ? 'enabled' : 'disabled',
+      reached: state === 'enabled' ? isEnabled : !isEnabled,
+      elementId,
+    };
+  }
+
+  /**
+   * Runs an action the way Playwright does: polls until the element passes `actionability`, then
+   * runs `perform` on that same element. If the driver refuses the action because the element
+   * went stale, is covered or is not interactable, the whole check runs again within what is left
+   * of the timeout, and a timeout after such a refusal keeps the driver error's `name`. Any other
+   * error from `perform` is thrown as is. Without `perform` (a trial) only the checks run.
+   */
+  private async act<T>(
+    action: string,
+    actionability: Actionability,
+    options: Partial<ActionOptions> | undefined,
+    perform?: (elementId: string) => Promise<T>,
+  ): Promise<T> {
+    const timeout = this.resolveTimeout(options);
+    let observed = 'detached' as ObservedState;
+    let rejection: unknown;
+    let outcome: { value: T } | { error: unknown } | undefined;
+    try {
+      await this.waitUntil(async () => {
+        let probe: Probe;
+        try {
+          probe = await this.probe(actionability);
+        } catch (error) {
+          if (error instanceof RetryableError) {
+            observed = 'rejected';
+            rejection = error;
+          }
+          throw error;
+        }
+        observed = probe.observed;
+        if (!probe.reached || !probe.elementId) {
+          return false;
+        }
+        if (!perform) {
+          return true;
+        }
+        try {
+          outcome = { value: await perform(probe.elementId) };
+        } catch (error) {
+          if (Locator.isRetryableActionError(error)) {
+            observed = 'rejected';
+            rejection = error;
+            return false;
+          }
+          outcome = { error };
+        }
+        return true;
+      }, timeout);
+    } catch (error) {
+      if (error instanceof TimeoutError) {
+        const failure = new Error(
+          this.describeActionFailure(action, actionability, observed, timeout, rejection),
+        );
+        if (observed === 'rejected' && rejection instanceof Error) {
+          failure.name = rejection.name;
+        }
+        throw failure;
+      }
+      throw error;
+    }
+    if (outcome && 'error' in outcome) {
+      throw outcome.error;
+    }
+    return outcome?.value as T;
+  }
+
+  private describeActionFailure(
+    action: string,
+    actionability: Actionability,
+    observed: ObservedState,
+    timeout: number,
+    rejection: unknown,
+  ): string {
+    const element = `Failed to ${action}: Element ${this.named}`;
+    const after = `after ${timeout}ms`;
+    switch (observed) {
+      case 'detached':
+        return actionability === 'attached'
+          ? `${element} not found ${after}`
+          : `${element} not visible ${after}: nothing matches the selector`;
+      case 'hidden':
+        return `${element} not visible ${after}`;
+      case 'disabled':
+        return `${element} is visible but disabled ${after}. Pass { force: true } to ${action} anyway.`;
+      default: {
+        const reason = rejection instanceof Error ? rejection.message : String(rejection);
+        return `${element} could not be used ${after}: ${reason}`;
+      }
+    }
+  }
+
+  private static isRetryableActionError(error: unknown): boolean {
+    const name = error instanceof Error ? error.name : '';
+    return [
+      WebDriverErrors.StaleElementReferenceError,
+      WebDriverErrors.ElementClickInterceptedError,
+      WebDriverErrors.ElementNotInteractableError,
+    ].some((retryable) => name.includes(retryable));
   }
 
   private static describeTimeout(state: ElementState, observed: ObservedState): string {
@@ -408,7 +532,7 @@ export class Locator {
       //@ts-ignore
       const errName = error.name;
       if (errName && errName.includes(WebDriverErrors.StaleElementReferenceError)) {
-        throw new RetryableError(`Stale element detected: ${error}`);
+        throw new RetryableError(`Stale element detected: ${error}`, errName);
       }
       throw error;
     }
@@ -428,63 +552,66 @@ export class Locator {
     return await this.webDriverClient.isElementEnabled(elementId);
   }
 
-  private async waitUntil<ReturnValue>(
-    condition: () => ReturnValue | Promise<ReturnValue>,
-    timeout: number,
-  ): Promise<Exclude<ReturnValue, boolean>> {
-    const fn = condition.bind(this.webDriverClient);
-    try {
-      return await retry(
-        async () => {
-          try {
-            const result = await fn();
-            if (result === false) {
-              throw new RetryableError(`condition returned false`);
-            }
-            return result as Exclude<ReturnValue, boolean>;
-          } catch (error) {
-            if (isNoSuchWindowError(error)) {
-              throw new NonRetryableError(
-                error instanceof Error ? error.message : String(error),
-                'NoSuchWindowError',
-              );
-            }
-            throw error;
-          }
-        },
-        {
-          maxRetryTime: timeout,
-          retries: Math.ceil(timeout / 1000),
-          factor: 1,
-        },
-      );
-    } catch (err: unknown) {
-      if (err instanceof RetryableError) {
-        // Last attempt failed, no longer retryable
-        throw new TimeoutError(`waitUntil condition timed out after ${timeout}ms`);
-      } else {
-        throw err;
+  /**
+   * Calls `condition` until it returns true, at once and then after each of POLL_DELAYS_MS, with
+   * a last call at the deadline. A `RetryableError` or any driver error means "not yet", but a
+   * driver error from the last call is thrown in place of the timeout. A closed window is thrown
+   * at once so the WebView wrapper can reattach.
+   */
+  private async waitUntil(condition: () => Promise<boolean>, timeout: number): Promise<void> {
+    const deadline = Date.now() + timeout;
+    for (let poll = 0; ; poll += 1) {
+      let lastError: unknown;
+      try {
+        if (await condition()) {
+          return;
+        }
+      } catch (error) {
+        if (isNoSuchWindowError(error)) {
+          throw new NonRetryableError(
+            error instanceof Error ? error.message : String(error),
+            'NoSuchWindowError',
+          );
+        }
+        if (!(error instanceof RetryableError)) {
+          lastError = error;
+        }
       }
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) {
+        if (lastError !== undefined) {
+          throw lastError;
+        }
+        throw new TimeoutError(`waitUntil condition timed out after ${timeout}ms`);
+      }
+      await delay(Math.min(POLL_DELAYS_MS[Math.min(poll, POLL_DELAYS_MS.length - 1)]!, remaining));
     }
   }
 
   @boxedStep
-  async tap(options?: ActionOptions) {
-    const elementId = await this.requireEnabledElementId('tap', options);
-    await this.webDriverClient.elementClick(elementId);
+  async tap(options?: TapOptions) {
+    const actionability = options?.force ? 'attached' : 'enabled';
+    await this.act(
+      'tap',
+      actionability,
+      options,
+      options?.trial ? undefined : (elementId) => this.webDriverClient.elementClick(elementId),
+    );
   }
 
   @boxedStep
   async getText(options?: ActionOptions): Promise<string> {
-    const elementId = await this.requireVisibleElementId('getText', options);
-    return await this.webDriverClient.getElementText(elementId);
+    return await this.act('getText', 'visible', options, (elementId) =>
+      this.webDriverClient.getElementText(elementId),
+    );
   }
 
   @boxedStep
   async boundingBox(options?: ActionOptions): Promise<Rect> {
-    const elementId = await this.requireVisibleElementId('boundingBox', options);
-    const { x, y, width, height } = await this.webDriverClient.getElementRect(elementId);
-    return { x, y, width, height };
+    return await this.act('boundingBox', 'visible', options, async (elementId) => {
+      const { x, y, width, height } = await this.webDriverClient.getElementRect(elementId);
+      return { x, y, width, height };
+    });
   }
 
   @boxedStep
@@ -590,48 +717,7 @@ export class Locator {
     );
   }
 
-  /**
-   * Waits for the element to be visible and returns the reference id the wait found it under,
-   * or throws with the action's name so the failure reads as "Failed to fill: …" rather than a
-   * bare timeout. Finding it again would cost a second lookup per action, and on iOS every XPath
-   * lookup is a full page-source snapshot.
-   */
-  private async requireVisibleElementId(action: string, options?: ActionOptions): Promise<string> {
-    const result = await this.waitForState('visible', this.resolveTimeout(options));
-    if (!result.reached) {
-      throw new Error(`Failed to ${action}: Element ${this.named} not visible`);
-    }
-    return Locator.foundElementId(action, this.named, result.elementId);
-  }
-
-  /**
-   * Like `requireVisibleElementId`, but also waits for the element to be enabled within the same
-   * timeout. A disabled control accepts a click and ignores it, so tapping one early fails much
-   * later and somewhere else; this fails here instead, saying the element is disabled.
-   */
-  private async requireEnabledElementId(action: string, options?: ActionOptions): Promise<string> {
-    const timeout = this.resolveTimeout(options);
-    const result = await this.waitForState('enabled', timeout);
-    if (!result.reached) {
-      if (result.observed === 'disabled') {
-        throw new Error(
-          `Failed to ${action}: Element ${this.named} is visible but disabled after ${timeout}ms`,
-        );
-      }
-      throw new Error(`Failed to ${action}: Element ${this.named} not visible`);
-    }
-    return Locator.foundElementId(action, this.named, result.elementId);
-  }
-
-  private static foundElementId(action: string, named: string, elementId: string | null): string {
-    if (!elementId) {
-      // Unreachable: a 'visible' or 'enabled' wait resolves only with an element.
-      throw new Error(`Failed to ${action}: Element ${named} is not found`);
-    }
-    return elementId;
-  }
-
-  private resolveTimeout(options?: ActionOptions): number {
+  private resolveTimeout(options?: Partial<ActionOptions>): number {
     return options?.timeout ?? this.timeoutOpts.expectTimeout;
   }
 
@@ -688,9 +774,5 @@ export class Locator {
       return false;
     }
     return secret || /^[•●*·]+$/.test(entered);
-  }
-
-  private toActionOptions(options?: Partial<ActionOptions>): ActionOptions | undefined {
-    return options?.timeout != null ? { timeout: options.timeout } : undefined;
   }
 }
