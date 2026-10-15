@@ -19,6 +19,7 @@ function mockClient(overrides: Record<string, unknown> = {}): MockClient {
     isAndroid: true,
     findElements: vi.fn().mockResolvedValue([ELEMENT]),
     isElementDisplayed: vi.fn().mockResolvedValue(true),
+    isElementEnabled: vi.fn().mockResolvedValue(true),
     elementClick: vi.fn().mockResolvedValue(undefined),
     elementClear: vi.fn().mockResolvedValue(undefined),
     elementSendKeys: vi.fn().mockResolvedValue(undefined),
@@ -358,5 +359,124 @@ describe('boundingBox', () => {
       'Failed to boundingBox: Element "#field" not visible',
     );
     expect(client.getElementRect).not.toHaveBeenCalled();
+  });
+});
+
+/** A DOM element as the WebView enabled-state script sees it. */
+type FakeNode = {
+  nodeType: 1;
+  tagName: string;
+  parentElement: FakeNode | null;
+  getAttribute: (name: string) => string | null;
+  matches: (selector: string) => boolean;
+};
+
+function domNode(
+  tagName: string,
+  { attrs = {}, disabled = false }: { attrs?: Record<string, string>; disabled?: boolean } = {},
+  parentElement: FakeNode | null = null,
+): FakeNode {
+  return {
+    nodeType: 1,
+    tagName,
+    parentElement,
+    getAttribute: (name) => attrs[name] ?? null,
+    matches: (selector) => selector === ':disabled' && disabled,
+  };
+}
+
+/** Runs the scripts the locator sends against `node`, the element the locator resolved to. */
+const runScriptOn = (node: FakeNode) =>
+  vi.fn().mockImplementation(async (script: string) => new Function(script).call(null, node));
+
+describe('enabled state', () => {
+  test('tap waits for a button that becomes enabled, then clicks once', async () => {
+    const client = mockClient({
+      isElementEnabled: vi.fn().mockResolvedValueOnce(false).mockResolvedValue(true),
+    });
+    await nativeLocator(client).tap({ timeout: 2_000 });
+    expect(client.isElementEnabled).toHaveBeenCalledTimes(2);
+    expect(calls(client.elementClick)).toEqual([['element-id']]);
+  });
+
+  test('tap on an element that stays disabled fails saying so, without clicking', async () => {
+    const client = mockClient({ isElementEnabled: vi.fn().mockResolvedValue(false) });
+    await expect(nativeLocator(client).tap({ timeout: 1_000 })).rejects.toThrow(
+      'Failed to tap: Element "//field" is visible but disabled after 1000ms',
+    );
+    expect(client.elementClick).not.toHaveBeenCalled();
+  });
+
+  test('tap on an element that never shows still fails as not visible', async () => {
+    const client = mockClient({
+      isElementDisplayed: vi.fn().mockResolvedValue(false),
+      isElementEnabled: vi.fn().mockResolvedValue(true),
+    });
+    await expect(nativeLocator(client).tap({ timeout: 1_000 })).rejects.toThrow(
+      'Failed to tap: Element "//field" not visible',
+    );
+    expect(client.isElementEnabled).not.toHaveBeenCalled();
+  });
+
+  test('native: reads WebDriver enabled, never a DOM script', async () => {
+    const client = mockClient({ isElementEnabled: vi.fn().mockResolvedValue(false) });
+    expect(await nativeLocator(client).isEnabled()).toBe(false);
+    expect(client.isElementEnabled).toHaveBeenCalledWith('element-id');
+    expect(client.executeScript).not.toHaveBeenCalled();
+  });
+
+  test('web: aria-disabled="true" on the button counts as disabled for its text', async () => {
+    const button = domNode('BUTTON', { attrs: { 'aria-disabled': 'true' } });
+    const client = mockClient({
+      executeScript: runScriptOn(domNode('SPAN', {}, button)),
+      isElementEnabled: vi.fn().mockResolvedValue(true),
+    });
+    const locator = webLocator(client);
+    expect(await locator.isEnabled()).toBe(false);
+    await expect(locator.tap({ timeout: 1_000 })).rejects.toThrow('is visible but disabled');
+    expect(client.elementClick).not.toHaveBeenCalled();
+    expect(client.isElementEnabled).not.toHaveBeenCalled();
+    expect(calls(client.executeScript)[0]![1]).toEqual([ELEMENT]);
+  });
+
+  test('web: a :disabled ancestor disables, aria-disabled="false" and a fieldset do not', async () => {
+    const isEnabledIn = (node: FakeNode) =>
+      webLocator(mockClient({ executeScript: runScriptOn(node) })).isEnabled();
+
+    expect(await isEnabledIn(domNode('SPAN', {}, domNode('BUTTON', { disabled: true })))).toBe(
+      false,
+    );
+    expect(await isEnabledIn(domNode('BUTTON', { attrs: { 'aria-disabled': 'false' } }))).toBe(
+      true,
+    );
+    expect(await isEnabledIn(domNode('P', {}, domNode('FIELDSET', { disabled: true })))).toBe(true);
+    expect(await isEnabledIn(domNode('SPAN', {}, domNode('BUTTON')))).toBe(true);
+  });
+
+  test("waitFor('enabled') names the disabled state; 'disabled' resolves on it", async () => {
+    const client = mockClient({ isElementEnabled: vi.fn().mockResolvedValue(false) });
+    const locator = nativeLocator(client);
+    const error = await locator.waitFor('enabled', { timeout: 1_000 }).catch((e: Error) => e);
+    expect(error).toBeInstanceOf(TimeoutError);
+    expect((error as Error).message).toBe('Element "//field" is visible but disabled after 1000ms');
+    await locator.waitFor('disabled');
+  });
+
+  test("waitFor('enabled') on a missing element says it did not become visible", async () => {
+    const client = mockClient({ findElements: vi.fn().mockResolvedValue([]) });
+    await expect(nativeLocator(client).waitFor('enabled', { timeout: 1_000 })).rejects.toThrow(
+      'Element "//field" did not become visible after 1000ms',
+    );
+  });
+
+  test("waitFor('visible') and fill do not read the enabled state", async () => {
+    const client = mockClient({
+      isElementEnabled: vi.fn().mockResolvedValue(false),
+      getElementAttribute: textAttr('x'),
+    });
+    const locator = nativeLocator(client);
+    await locator.waitFor('visible');
+    await locator.fill('x');
+    expect(client.isElementEnabled).not.toHaveBeenCalled();
   });
 });
