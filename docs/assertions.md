@@ -18,3 +18,13 @@ The `toBeVisible` assertion checks if an element is visible on the screen.
 ```ts
   await expect(device.getByText('Login')).toBeVisible();
 ```
+
+## toBeEnabled / toBeDisabled
+
+`toBeEnabled` waits for the element to be visible and enabled; `toBeDisabled` waits for it to be visible and disabled. `.not.toBeEnabled()` is the same wait as `toBeDisabled()`, and the other way round. See [locators](locators.md#check-whether-an-element-is-enabled) for what counts as disabled on native elements and in a WebView.
+
+```ts
+await expect(webView.getByText('Next')).toBeDisabled();
+await webView.getByLabel('Device name').fill('Station 1');
+await expect(webView.getByText('Next')).toBeEnabled();
+```

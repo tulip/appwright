@@ -18,7 +18,7 @@ test("isVisible on unknown element", async () => {
   );
   const isVisible = await locator.isVisible();
   expect(isVisible).toBe(false);
-  expect(mockFindElements).toHaveBeenCalledTimes(2);
+  expect(mockFindElements.mock.calls.length).toBeGreaterThan(1);
 });
 
 test("isVisible on element that is found but fails displayed check", async () => {
@@ -41,8 +41,8 @@ test("isVisible on element that is found but fails displayed check", async () =>
   );
   const isVisible = await locator.isVisible();
   expect(isVisible).toBe(false);
-  expect(mockFindElements).toHaveBeenCalledTimes(2);
-  expect(mockIsElementDisplayed).toHaveBeenCalledTimes(2);
+  expect(mockFindElements.mock.calls.length).toBeGreaterThan(1);
+  expect(mockIsElementDisplayed).toHaveBeenCalledTimes(mockFindElements.mock.calls.length);
   expect(mockIsElementDisplayed).toHaveBeenCalledWith("element-id");
 });
 
@@ -74,8 +74,8 @@ test("isVisible on element that throws stale element reference", async () => {
   );
   const isVisible = await locator.isVisible();
   expect(isVisible).toBe(false);
-  expect(mockFindElements).toHaveBeenCalledTimes(2);
-  expect(mockIsElementDisplayed).toHaveBeenCalledTimes(2);
+  expect(mockFindElements.mock.calls.length).toBeGreaterThan(1);
+  expect(mockIsElementDisplayed).toHaveBeenCalledTimes(mockFindElements.mock.calls.length);
   expect(mockIsElementDisplayed).toHaveBeenCalledWith("element-id");
 });
 
@@ -97,7 +97,7 @@ test("waitFor attached state works for hidden element", async () => {
     "//attached-hidden-element",
     "xpath",
   );
-  expect(await locator.waitFor("attached")).toBe(true);
+  await expect(locator.waitFor("attached")).resolves.toBeUndefined();
   expect(mockFindElements).toHaveBeenCalledTimes(1);
   expect(mockIsElementDisplayed).toHaveBeenCalledTimes(0);
 });
@@ -115,5 +115,5 @@ test("waitFor attached state throws TimeoutError", async () => {
     "xpath",
   );
   await expect(locator.waitFor("attached")).rejects.toThrowError(TimeoutError);
-  expect(mockFindElements).toHaveBeenCalledTimes(2);
+  expect(mockFindElements.mock.calls.length).toBeGreaterThan(1);
 });

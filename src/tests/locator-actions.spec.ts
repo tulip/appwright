@@ -288,3 +288,283 @@ describe('clear / press / inputValue', () => {
     expect(await locator.inputValue()).toBe('typed');
   });
 });
+
+/** A DOM element as the WebView enabled-state script sees it. */
+type FakeNode = {
+  nodeType: 1;
+  tagName: string;
+  isContentEditable: boolean;
+  parentElement: FakeNode | null;
+  getAttribute: (name: string) => string | null;
+  matches: (selector: string) => boolean;
+  closest: (selector: string) => FakeNode | null;
+};
+
+const BUTTON_LIKE_ROLES = ['button', 'checkbox', 'radio'];
+
+/**
+ * `disabled` stands for the browser's own `:disabled` match, so a control inside a disabled
+ * fieldset is built with `disabled: true` the way the browser would report it. `closest` only
+ * understands the button-like selector the script uses.
+ */
+function domNode(
+  tagName: string,
+  { attrs = {}, disabled = false }: { attrs?: Record<string, string>; disabled?: boolean } = {},
+  parentElement: FakeNode | null = null,
+): FakeNode {
+  const node: FakeNode = {
+    nodeType: 1,
+    tagName,
+    isContentEditable: attrs.contenteditable === 'true',
+    parentElement,
+    getAttribute: (name) => attrs[name] ?? null,
+    matches: (selector) => selector === ':disabled' && disabled,
+    closest: () => {
+      for (let n: FakeNode | null = node; n; n = n.parentElement) {
+        if (n.tagName === 'BUTTON' || BUTTON_LIKE_ROLES.includes(n.getAttribute('role') ?? '')) {
+          return n;
+        }
+      }
+      return null;
+    },
+  };
+  return node;
+}
+
+/** Runs the scripts the locator sends against `node`, the element the locator resolved to. */
+const runScriptOn = (node: FakeNode) =>
+  vi.fn().mockImplementation(async (script: string) => new Function(script).call(null, node));
+
+/** A WebDriver error the way the `webdriver` client names it. */
+function driverError(name: string, message = name): Error {
+  const error = new Error(message);
+  error.name = name;
+  return error;
+}
+
+describe('tap actionability', () => {
+  test('waits for a button that becomes enabled, then clicks once', async () => {
+    const client = mockClient({
+      isElementEnabled: vi.fn().mockResolvedValueOnce(false).mockResolvedValue(true),
+    });
+    await nativeLocator(client).tap({ timeout: 2_000 });
+    expect(client.isElementEnabled).toHaveBeenCalledTimes(2);
+    expect(calls(client.elementClick)).toEqual([['element-id']]);
+  });
+
+  test('an element that stays disabled fails saying so, with the force hint, without clicking', async () => {
+    const client = mockClient({ isElementEnabled: vi.fn().mockResolvedValue(false) });
+    await expect(nativeLocator(client).tap({ timeout: 1_000 })).rejects.toThrow(
+      'Failed to tap: Element "//field" is visible but disabled after 1000ms. ' +
+        'Pass { force: true } to tap anyway.',
+    );
+    expect(client.elementClick).not.toHaveBeenCalled();
+  });
+
+  test('a hidden element fails as not visible, without reading the enabled state', async () => {
+    const client = mockClient({
+      isElementDisplayed: vi.fn().mockResolvedValue(false),
+      isElementEnabled: vi.fn().mockResolvedValue(true),
+    });
+    await expect(nativeLocator(client).tap({ timeout: 1_000 })).rejects.toThrow(
+      'Failed to tap: Element "//field" not visible after 1000ms',
+    );
+    expect(client.isElementEnabled).not.toHaveBeenCalled();
+  });
+
+  test('a selector that matches nothing says so', async () => {
+    const client = mockClient({ findElements: vi.fn().mockResolvedValue([]) });
+    await expect(nativeLocator(client).tap({ timeout: 1_000 })).rejects.toThrow(
+      'Failed to tap: Element "//field" not visible after 1000ms: nothing matches the selector',
+    );
+  });
+
+  test('force taps a hidden, disabled element as soon as it exists', async () => {
+    const client = mockClient({
+      isElementDisplayed: vi.fn().mockResolvedValue(false),
+      isElementEnabled: vi.fn().mockResolvedValue(false),
+    });
+    await nativeLocator(client).tap({ force: true });
+    expect(calls(client.elementClick)).toEqual([['element-id']]);
+    expect(client.isElementDisplayed).not.toHaveBeenCalled();
+    expect(client.isElementEnabled).not.toHaveBeenCalled();
+  });
+
+  test('force still waits for the element to exist', async () => {
+    const client = mockClient({ findElements: vi.fn().mockResolvedValue([]) });
+    await expect(nativeLocator(client).tap({ force: true, timeout: 1_000 })).rejects.toThrow(
+      'Failed to tap: Element "//field" not found after 1000ms',
+    );
+  });
+
+  test('trial runs the checks without tapping', async () => {
+    const enabled = mockClient({ isElementEnabled: vi.fn().mockResolvedValue(true) });
+    await nativeLocator(enabled).tap({ trial: true });
+    expect(enabled.isElementEnabled).toHaveBeenCalled();
+    expect(enabled.elementClick).not.toHaveBeenCalled();
+
+    const disabled = mockClient({ isElementEnabled: vi.fn().mockResolvedValue(false) });
+    await expect(nativeLocator(disabled).tap({ trial: true, timeout: 1_000 })).rejects.toThrow(
+      'is visible but disabled',
+    );
+    expect(disabled.elementClick).not.toHaveBeenCalled();
+  });
+
+  test.each(['element click intercepted', 'stale element reference', 'element not interactable'])(
+    'a "%s" click re-runs the checks and taps again',
+    async (name) => {
+      const client = mockClient({
+        isElementEnabled: vi.fn().mockResolvedValue(true),
+        elementClick: vi.fn().mockRejectedValueOnce(driverError(name)).mockResolvedValue(undefined),
+      });
+      await nativeLocator(client).tap({ timeout: 2_000 });
+      expect(client.elementClick).toHaveBeenCalledTimes(2);
+      expect(client.findElements).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  test('a click that stays intercepted reports the driver error at the timeout', async () => {
+    const client = mockClient({
+      isElementEnabled: vi.fn().mockResolvedValue(true),
+      elementClick: vi
+        .fn()
+        .mockRejectedValue(
+          driverError('element click intercepted', 'Other element would receive the click'),
+        ),
+    });
+    await expect(nativeLocator(client).tap({ timeout: 1_000 })).rejects.toThrow(
+      'Failed to tap: Element "//field" could not be used after 1000ms: ' +
+        'Other element would receive the click',
+    );
+  });
+
+  test('an element that keeps going stale says so at the timeout', async () => {
+    const client = mockClient({
+      isElementDisplayed: vi.fn().mockRejectedValue(driverError('stale element reference')),
+    });
+    await expect(nativeLocator(client).tap({ timeout: 1_000 })).rejects.toThrow(
+      'Failed to tap: Element "//field" could not be used after 1000ms: Stale element detected',
+    );
+  });
+
+  test('any other click error is thrown at once', async () => {
+    const client = mockClient({
+      isElementEnabled: vi.fn().mockResolvedValue(true),
+      elementClick: vi.fn().mockRejectedValue(new Error('session deleted')),
+    });
+    await expect(nativeLocator(client).tap({ timeout: 5_000 })).rejects.toThrow('session deleted');
+    expect(client.elementClick).toHaveBeenCalledTimes(1);
+  });
+
+  test('acts on the element it checked, without finding it again', async () => {
+    const client = mockClient({ getElementAttribute: textAttr('x') });
+    await nativeLocator(client).fill('x');
+    expect(client.findElements).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('enabled state', () => {
+  test('native: reads WebDriver enabled, never a DOM script', async () => {
+    const client = mockClient({ isElementEnabled: vi.fn().mockResolvedValue(false) });
+    expect(await nativeLocator(client).isEnabled()).toBe(false);
+    expect(client.isElementEnabled).toHaveBeenCalledWith('element-id');
+    expect(client.executeScript).not.toHaveBeenCalled();
+  });
+
+  test('web: aria-disabled="true" on the button disables the text inside it', async () => {
+    const button = domNode('BUTTON', { attrs: { 'aria-disabled': 'true' } });
+    const client = mockClient({
+      executeScript: runScriptOn(domNode('SPAN', {}, button)),
+      isElementEnabled: vi.fn().mockResolvedValue(true),
+    });
+    const locator = webLocator(client);
+    expect(await locator.isEnabled()).toBe(false);
+    await expect(locator.tap({ timeout: 1_000 })).rejects.toThrow('is visible but disabled');
+    expect(client.elementClick).not.toHaveBeenCalled();
+    expect(client.isElementEnabled).not.toHaveBeenCalled();
+    expect(calls(client.executeScript)[0]![1]).toEqual([ELEMENT]);
+  });
+
+  test('web: follows Playwright: retarget to the button, native :disabled, nearest aria-disabled', async () => {
+    const isEnabledIn = (node: FakeNode) =>
+      webLocator(mockClient({ executeScript: runScriptOn(node) })).isEnabled();
+
+    // Text inside a disabled button reads the button.
+    expect(await isEnabledIn(domNode('SPAN', {}, domNode('BUTTON', { disabled: true })))).toBe(
+      false,
+    );
+    expect(await isEnabledIn(domNode('SPAN', {}, domNode('BUTTON')))).toBe(true);
+    // A role=button counts as a button.
+    const roleButton = domNode('DIV', { attrs: { role: 'button', 'aria-disabled': 'true' } });
+    expect(await isEnabledIn(domNode('SPAN', {}, roleButton))).toBe(false);
+    // A disabled form field.
+    expect(await isEnabledIn(domNode('INPUT', { disabled: true }))).toBe(false);
+    // The nearest aria-disabled wins.
+    const off = domNode('DIV', { attrs: { 'aria-disabled': 'true' } });
+    expect(await isEnabledIn(domNode('BUTTON', { attrs: { 'aria-disabled': 'false' } }, off))).toBe(
+      true,
+    );
+    // A disabled fieldset only disables the controls inside it, not its text.
+    expect(await isEnabledIn(domNode('P', {}, domNode('FIELDSET', { disabled: true })))).toBe(true);
+  });
+
+  test("waitFor('enabled') names the disabled state; 'disabled' resolves on it", async () => {
+    const client = mockClient({ isElementEnabled: vi.fn().mockResolvedValue(false) });
+    const locator = nativeLocator(client);
+    const error = await locator.waitFor('enabled', { timeout: 1_000 }).catch((e: Error) => e);
+    expect(error).toBeInstanceOf(TimeoutError);
+    expect((error as Error).message).toBe('Element "//field" is visible but disabled after 1000ms');
+    await locator.waitFor('disabled');
+  });
+
+  test("waitFor('enabled') on a missing element says it did not become visible", async () => {
+    const client = mockClient({ findElements: vi.fn().mockResolvedValue([]) });
+    await expect(nativeLocator(client).waitFor('enabled', { timeout: 1_000 })).rejects.toThrow(
+      'Element "//field" did not become visible after 1000ms',
+    );
+  });
+
+  test("waitFor('visible') and fill do not read the enabled state", async () => {
+    const client = mockClient({
+      isElementEnabled: vi.fn().mockResolvedValue(false),
+      getElementAttribute: textAttr('x'),
+    });
+    const locator = nativeLocator(client);
+    await locator.waitFor('visible');
+    await locator.fill('x');
+    expect(client.isElementEnabled).not.toHaveBeenCalled();
+  });
+});
+
+describe('polling', () => {
+  test('polls at once, then after 100, 250 and 500 ms, and a last time at the deadline', async () => {
+    vi.useFakeTimers();
+    try {
+      const start = Date.now();
+      const at: number[] = [];
+      const client = mockClient({
+        findElements: vi.fn().mockImplementation(async () => {
+          at.push(Date.now() - start);
+          return [];
+        }),
+      });
+      const done = nativeLocator(client)
+        .waitFor('visible', { timeout: 1_000 })
+        .catch((e: Error) => e);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(await done).toBeInstanceOf(TimeoutError);
+      expect(at).toEqual([0, 100, 350, 850, 1_000]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test('a driver error that persists is thrown in place of the timeout', async () => {
+    const client = mockClient({
+      findElements: vi.fn().mockRejectedValue(new Error('chromedriver disconnected')),
+    });
+    await expect(nativeLocator(client).waitFor('visible', { timeout: 1_000 })).rejects.toThrow(
+      'chromedriver disconnected',
+    );
+  });
+});
