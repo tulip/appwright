@@ -1,12 +1,7 @@
 import os from 'os';
 import path from 'path';
 
-import {
-  DeviceEntry,
-  EmulatorConfig,
-  LocalDeviceConfig,
-  Platform,
-} from '../types';
+import { DeviceEntry, EmulatorConfig, LocalDeviceConfig, Platform } from '../types';
 
 /**
  * Environment variable through which globalSetup tells worker processes which port the
@@ -182,4 +177,38 @@ function assertValidSlot(slot: number) {
   if (!Number.isInteger(slot) || slot < 0) {
     throw new Error(`Worker slot must be a non-negative integer, got ${slot}.`);
   }
+}
+
+/** Capability names defined by the W3C WebDriver spec; everything else needs a vendor prefix. */
+const W3C_CAPABILITIES = new Set([
+  'platformName',
+  'browserName',
+  'browserVersion',
+  'acceptInsecureCerts',
+  'pageLoadStrategy',
+  'proxy',
+  'setWindowRect',
+  'timeouts',
+  'strictFileInteractability',
+  'unhandledPromptBehavior',
+  'webSocketUrl',
+]);
+
+/**
+ * Merges a project's `capabilities` over the ones appwright built, so a user value wins. Keys
+ * without a vendor prefix (no `:`) that are not W3C capabilities get `appium:`.
+ */
+export function mergeCapabilities(
+  base: Record<string, unknown>,
+  overrides: Record<string, unknown> | undefined,
+): Record<string, unknown> {
+  if (overrides == null) {
+    return base;
+  }
+  const merged = { ...base };
+  for (const [key, value] of Object.entries(overrides)) {
+    const name = key.includes(':') || W3C_CAPABILITIES.has(key) ? key : `appium:${key}`;
+    merged[name] = value;
+  }
+  return merged;
 }

@@ -17,7 +17,12 @@ import {
   getConnectedIOSDeviceUDID,
   isAppiumHealthy,
 } from '../appium';
-import { getAppiumPort, getDeviceEntryForSlot, getSlotCapabilities } from '../slots';
+import {
+  getAppiumPort,
+  getDeviceEntryForSlot,
+  getSlotCapabilities,
+  mergeCapabilities,
+} from '../slots';
 
 export class LocalDeviceProvider implements DeviceProvider {
   sessionId?: string;
@@ -121,40 +126,47 @@ To specify a device, use the udid property. Run "adb devices" to get the UDID fo
     }
     return {
       port: getAppiumPort(),
-      capabilities: {
-        'appium:deviceName': this.project.use.device?.name,
-        'appium:udid': udid,
-        'appium:automationName': platformName == Platform.ANDROID ? 'uiautomator2' : 'xcuitest',
-        platformName: platformName,
-        'appium:autoGrantPermissions': true,
-        'appium:app': this.project.use.buildPath,
-        'appium:appActivity': appLaunchableActivity,
-        'appium:appPackage': appPackageName,
-        'appium:autoAcceptAlerts': true,
-        'appium:deviceOrientation': this.project.use.device?.orientation,
-        'appium:settings[snapshotMaxDepth]': 62,
+      capabilities: mergeCapabilities(
+        {
+          'appium:deviceName': this.project.use.device?.name,
+          'appium:udid': udid,
+          'appium:automationName': platformName == Platform.ANDROID ? 'uiautomator2' : 'xcuitest',
+          platformName: platformName,
+          'appium:autoGrantPermissions': true,
+          'appium:app': this.project.use.buildPath,
+          'appium:appActivity': appLaunchableActivity,
+          'appium:appPackage': appPackageName,
+          'appium:autoAcceptAlerts': true,
+          'appium:deviceOrientation': this.project.use.device?.orientation,
+          'appium:settings[snapshotMaxDepth]': 62,
 
-        'appium:fullReset': deviceConfig.uninstallAppBeforeTest ?? false,
-        'appium:noReset': deviceConfig.preserveAppState ?? true,
+          'appium:fullReset': deviceConfig.uninstallAppBeforeTest ?? false,
+          'appium:noReset': deviceConfig.preserveAppState ?? true,
 
-        'appium:newCommandTimeout': 300,
+          'appium:newCommandTimeout': 300,
 
-        // Ports/paths that must be unique per concurrent session on this host.
-        ...getSlotCapabilities(platformName, this.slot),
+          // Ports/paths that must be unique per concurrent session on this host.
+          ...getSlotCapabilities(platformName, this.slot),
 
-        ...(platformName == Platform.IOS && {
-          'appium:wdaLaunchTimeout': 600_000,
-          'appium:useNewWDA': false,
-          'appium:iosInstallPause': 5000,
-          ...(deviceConfig.updatedWDABundleId && {
-            'appium:updatedWDABundleId': deviceConfig.updatedWDABundleId,
+          ...(platformName == Platform.IOS && {
+            'appium:wdaLaunchTimeout': 600_000,
+            'appium:useNewWDA': false,
+            'appium:iosInstallPause': 5000,
+            ...(deviceConfig.updatedWDABundleId && {
+              'appium:updatedWDABundleId': deviceConfig.updatedWDABundleId,
+            }),
+            ...(deviceConfig.xcodeOrgId && { 'appium:xcodeOrgId': deviceConfig.xcodeOrgId }),
+            ...(deviceConfig.xcodeSigningId && {
+              'appium:xcodeSigningId': deviceConfig.xcodeSigningId,
+            }),
           }),
-        }),
 
-        ...(platformName == Platform.ANDROID && {
-          'appium:extractChromeAndroidPackageFromContextName': true,
-        }),
-      },
+          ...(platformName == Platform.ANDROID && {
+            'appium:extractChromeAndroidPackageFromContextName': true,
+          }),
+        },
+        deviceConfig.capabilities,
+      ),
     };
   }
 }
