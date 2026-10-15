@@ -104,10 +104,11 @@ export interface DeviceProvider {
   /**
    * Global setup validates the configuration and prepares devices.
    *
-   * @param options.workers number of Playwright workers for this run; providers may use it to
-   * decide how many configured devices to prepare (e.g. how many emulators to boot).
+   * @param options.workers number of Playwright workers for this run.
+   * @param options.devices local providers: the devices this run leased for the project, one per
+   * worker slot (emulators/simulators among them may still need booting).
    */
-  globalSetup?(options?: { workers: number }): Promise<void>;
+  globalSetup?(options?: { workers: number; devices?: LeasedDevice[] }): Promise<void>;
 
   /**
    * Returns a device instance.
@@ -140,10 +141,12 @@ export type DeviceConfig =
   | EmulatorConfig;
 
 /**
- * One physical device, emulator or simulator that a project can drive.
+ * One physical device, emulator or simulator in a project's device pool.
  *
- * Devices are assigned to Playwright workers by position: worker slot `n`
- * (Playwright's `parallelIndex`) always uses `devices[n]`.
+ * Each `appwright test` run leases the devices it uses from the pool, so concurrent runs on one
+ * machine never share a device. Without `--device`, a run takes the first free entries in pool
+ * order, one per worker; worker slot `n` (Playwright's `parallelIndex`) drives the `n`-th device
+ * the run leased.
  */
 export type DeviceEntry = {
   /**
@@ -159,8 +162,35 @@ export type DeviceEntry = {
    * **Emulator provider, Android only**: name of the AVD to boot when `udid` is not online
    * when the run starts (see `emulator -list-avds`). Emulators booted by Appwright are shut down
    * at the end of the run; emulators that were already running are left alone.
+   *
+   * The emulator refuses to run one AVD in two processes (unless every instance is read-only), so
+   * give every entry its own AVD. A run also leases the AVD, so another run cannot boot it on a
+   * different port meanwhile.
    */
   avd?: string;
+
+  /**
+   * Optional label for `--device <name>`. `--device` also matches the udid, the `avd`, and the
+   * name the platform reports (simulator name, iOS device name, Android model).
+   */
+  name?: string;
+};
+
+/**
+ * A pool entry this run leased, as handed to the workers. `udid` is unset for legacy configs
+ * without a pool, where the device is picked automatically.
+ */
+export type LeasedDevice = {
+  udid?: string;
+  avd?: string;
+  name?: string;
+  /**
+   * Host-wide port slot leased with the device. Per-session Appium ports are derived from it, so
+   * concurrent runs never collide.
+   */
+  portSlot: number;
+  /** Whether the device was already running when it was leased. */
+  online?: boolean;
 };
 
 /**
@@ -282,9 +312,9 @@ export type LocalDeviceConfig = {
   udid?: string;
 
   /**
-   * Devices available to this project, one per Playwright worker. Worker slot `n`
-   * (`parallelIndex`) uses `devices[n]`. `workers` in the config must not exceed the
-   * number of entries.
+   * Device pool for this project. Each run leases one free, connected device per Playwright
+   * worker, so concurrent runs get different devices; `--device <udid|name>` pins a run to one
+   * of them. `workers` in the config must not exceed the number of entries.
    */
   devices?: DeviceEntry[];
 
@@ -339,10 +369,10 @@ export type EmulatorConfig = {
   udid?: string;
 
   /**
-   * Emulators/simulators available to this project, one per Playwright worker. Worker slot `n`
-   * (`parallelIndex`) uses `devices[n]`. Android entries may carry an `avd` name so Appwright can
-   * boot the emulator when it is not already running. `workers` in the config must not exceed the
-   * number of entries.
+   * Emulator/simulator pool for this project. Each run leases one free entry per Playwright
+   * worker, so concurrent runs get different devices; `--device <udid|name>` pins a run to one of
+   * them. Android entries carry an `avd` name so Appwright can boot the emulator when it is not
+   * already running. `workers` in the config must not exceed the number of entries.
    */
   devices?: DeviceEntry[];
 
