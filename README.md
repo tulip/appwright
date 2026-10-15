@@ -53,11 +53,15 @@ test('WebView login test', async ({ device, webView }) => {
 ### Supported Locators
 
 - `webView.getByTestId()` - Recommended for WebView elements
-- `webView.getByText()` - Find by visible text
+- `webView.getByText()` - Find by text, as Playwright does (the element holding it, not its ancestors)
+- `webView.getByRole()` - Find by ARIA role and accessible name
 - `webView.css()` - CSS selectors
 - `webView.getByXpath()` - XPath expressions
 - `webView.getByPlaceholder()` - Input placeholder text
 - `webView.evaluate()` - Execute JavaScript in WebView context
+- `webView.attach()` - Re-bind a live page after a reload, relaunch or browser hand-off
+
+Locators chain: `webView.getByTestId('menu').getByRole('button', { name: 'Settings' })`.
 
 ### Limitation
 

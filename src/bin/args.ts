@@ -9,7 +9,7 @@ import {
 export const DEFAULT_CONFIG_FILE = 'appwright.config.ts';
 
 export type Invocation = {
-  /** Arguments to hand to `npx playwright`, with appwright-only flags removed. */
+  /** Arguments to hand to the Playwright CLI, with appwright-only flags removed. */
   pwArgs: string[];
   /** Extra environment for the Playwright process. */
   env: Record<string, string>;

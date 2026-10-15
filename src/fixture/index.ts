@@ -7,6 +7,7 @@ import {
   AppwrightConfig,
   AppwrightLocator,
   CleanDeviceOptions,
+  DeviceOrientation,
   DeviceProvider,
   Platform,
 } from '../types';
@@ -71,6 +72,9 @@ export const test = base.extend<TestLevelFixtures, WorkerLevelFixtures>({
     });
     await deviceProvider.syncTestDetails?.({ name: testInfo.title });
     await use(device);
+    // A rotation outlives the session: put back what the project configures for the next test.
+    const project = testInfo.project as FullProject<AppwrightConfig>;
+    await device.restoreOrientation(project.use.device?.orientation ?? DeviceOrientation.PORTRAIT);
     await device.close();
     await deviceProvider.syncTestDetails?.({
       name: testInfo.title,

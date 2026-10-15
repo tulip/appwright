@@ -1,15 +1,42 @@
-import { query } from "@empiricalrun/llm/vision";
-import { getCoordinatesFor } from "@empiricalrun/llm/vision/point";
+import type { LLMModel } from "@empiricalrun/llm";
 import fs from "fs";
 // @ts-ignore ts not able to identify the import is just an interface
 import { Client as WebDriverClient } from "webdriver";
 import { Device } from "../device";
 import test from "@playwright/test";
 import { boxedStep } from "../utils";
-import { z } from "zod";
-import { LLMModel } from "@empiricalrun/llm";
-import { ExtractType } from "../types";
+import type { z } from "zod";
+import { ExtractType, VisionModel } from "../types";
 import { logger } from "../logger";
+
+const LLM_PACKAGE = "@empiricalrun/llm";
+
+/**
+ * `@empiricalrun/llm` is an optional peer dependency: only `device.beta` uses it, and it brings
+ * several AI SDKs, the AWS SDK and sharp with it. It is loaded on first use, not with appwright.
+ */
+async function loadLlm() {
+  try {
+    const [vision, point] = await Promise.all([
+      import("@empiricalrun/llm/vision"),
+      import("@empiricalrun/llm/vision/point"),
+    ]);
+    return { query: vision.query, getCoordinatesFor: point.getCoordinatesFor };
+  } catch (error) {
+    const code = (error as { code?: string }).code;
+    const missing =
+      (code === "ERR_MODULE_NOT_FOUND" || code === "MODULE_NOT_FOUND") &&
+      String((error as Error).message).includes(LLM_PACKAGE);
+    // Anything else, a missing dependency of the package itself included, is rethrown as is.
+    if (missing) {
+      throw new Error(
+        `device.beta.query() and device.beta.tap() need ${LLM_PACKAGE}, an optional peer ` +
+          `dependency of appwright. Install it next to appwright: npm install --save-dev ${LLM_PACKAGE}`,
+      );
+    }
+    throw error;
+  }
+}
 
 export interface AppwrightVision {
   /**
@@ -28,7 +55,7 @@ export interface AppwrightVision {
     prompt: string,
     options?: {
       responseFormat?: T;
-      model?: LLMModel;
+      model?: VisionModel;
       screenshot?: string;
       telemetry?: {
         tags?: string[];
@@ -69,7 +96,7 @@ export class VisionProvider {
     prompt: string,
     options?: {
       responseFormat?: T;
-      model?: LLMModel;
+      model?: VisionModel;
       screenshot?: string;
     },
   ): Promise<ExtractType<T>> {
@@ -77,11 +104,15 @@ export class VisionProvider {
       !process.env.OPENAI_API_KEY,
       "LLM vision based extract text is not enabled. Set the OPENAI_API_KEY environment variable to enable it",
     );
+    const { query } = await loadLlm();
     let base64Screenshot = options?.screenshot;
     if (!base64Screenshot) {
       base64Screenshot = await this.webDriverClient.takeScreenshot();
     }
-    return await query(base64Screenshot, prompt, options);
+    return await query(base64Screenshot, prompt, {
+      ...options,
+      model: options?.model as LLMModel | undefined,
+    });
   }
 
   @boxedStep
@@ -93,6 +124,7 @@ export class VisionProvider {
       !process.env.EMPIRICAL_API_KEY,
       "LLM vision based tap is not enabled. Set the EMPIRICAL_API_KEY environment variable to enable it",
     );
+    const { getCoordinatesFor } = await loadLlm();
     const base64Image = await this.webDriverClient.takeScreenshot();
     const coordinates = await getCoordinatesFor(prompt, base64Image, options);
     if (coordinates.annotatedImage) {
