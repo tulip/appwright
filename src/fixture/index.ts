@@ -189,4 +189,49 @@ export const expect = test.expect.extend({
       actual: isVisible,
     };
   },
+
+  /**
+   * Waits for the element to be visible and enabled. Under `.not` it waits for the element to be
+   * visible and disabled, the same as `toBeDisabled()`.
+   */
+  async toBeEnabled(this: ExpectMatcherState, locator: AppwrightLocator, options?: ActionOptions) {
+    return await matchEnabledState(this, 'toBeEnabled', locator, 'enabled', options);
+  },
+
+  /**
+   * Waits for the element to be visible and disabled. Under `.not` it waits for the element to be
+   * visible and enabled, the same as `toBeEnabled()`.
+   */
+  async toBeDisabled(this: ExpectMatcherState, locator: AppwrightLocator, options?: ActionOptions) {
+    return await matchEnabledState(this, 'toBeDisabled', locator, 'disabled', options);
+  },
 });
+
+async function matchEnabledState(
+  matcher: ExpectMatcherState,
+  name: string,
+  locator: AppwrightLocator,
+  state: 'enabled' | 'disabled',
+  options?: ActionOptions,
+) {
+  const target = matcher.isNot ? (state === 'enabled' ? 'disabled' : 'enabled') : state;
+  let failure = '';
+  try {
+    await locator.waitFor(target, options);
+  } catch (err) {
+    if (!(err instanceof TimeoutError)) {
+      throw err;
+    }
+    failure = err.message;
+  }
+  const reached = failure === '';
+  // `pass` describes the positive assertion; Playwright inverts it for `.not`.
+  const pass = matcher.isNot ? !reached : reached;
+  return {
+    message: () => failure,
+    pass,
+    name,
+    expected: !matcher.isNot,
+    actual: pass,
+  };
+}
