@@ -74,6 +74,8 @@ To tap an element, you can use the `tap` method.
 await device.getByText('Submit').tap();
 ```
 
+`tap` waits, within the action's timeout, for the element to be visible **and enabled** before it clicks, like Playwright's actionability checks. A disabled button accepts a click and does nothing, so a tap that lands while a form is still validating would otherwise pass and the test would fail later somewhere else. If the element is still disabled when the timeout runs out, `tap` throws `Element "…" is visible but disabled` instead of "not visible". See [enabled state](#check-whether-an-element-is-enabled) for what counts as disabled. `fill` and the other actions wait only for visibility.
+
 ### Enter text in a text field
 
 To enter text into an element, you can use the `fill` method. It **replaces** the field's contents: it taps the field, clears it, types the value and reads it back, retrying once if the field did not take the whole value (iOS drops leading characters when a field takes focus mid-send).
@@ -144,6 +146,20 @@ await device.getByText('Loading…').waitFor('hidden');
 ```
 
 `expect(locator).not.toBeVisible()` uses the same wait, so it returns as soon as the element is gone rather than after the full timeout.
+
+## Check whether an element is enabled
+
+`isEnabled` waits for the element to be visible, then returns whether it is enabled right now. To wait for the state instead, use `waitFor('enabled')` / `waitFor('disabled')` or the [`toBeEnabled` / `toBeDisabled`](assertions.md#tobeenabled--tobedisabled) assertions. Both states also require the element to be visible.
+
+```ts
+const canSubmit = await webView.getByText('Submit').isEnabled();
+await webView.getByText('Next').waitFor('enabled');
+```
+
+What counts as disabled depends on where the element lives:
+
+- **Native (UiAutomator2 / XCUITest):** the element's WebDriver `enabled` state.
+- **WebView:** the element or any ancestor matches `:disabled` (e.g. `<button disabled>`) or has `aria-disabled="true"`. Ancestors count because `getByText` resolves to the innermost element holding the text, often a `<span>` inside the `<button>` that carries the state.
 
 ## Scroll screen
 
