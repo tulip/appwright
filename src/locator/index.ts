@@ -48,6 +48,20 @@ const WEB_CLEAR_SCRIPT = `
 const WEB_VALUE_SCRIPT =
   'var el = arguments[0]; return el && el.value != null ? String(el.value) : "";';
 
+/**
+ * Whether a DOM element is enabled: neither it nor an ancestor is `:disabled` or
+ * `aria-disabled="true"`. Ancestors count because text locators resolve to the innermost match,
+ * which is often a `<span>` inside the `<button>` that carries the state. A `<fieldset>` is
+ * skipped as an ancestor: the controls inside a disabled one match `:disabled` themselves.
+ */
+const WEB_ENABLED_SCRIPT = `
+  for (var n = arguments[0]; n && n.nodeType === 1; n = n.parentElement) {
+    if (n.getAttribute('aria-disabled') === 'true') { return false; }
+    if (n.tagName !== 'FIELDSET' && n.matches && n.matches(':disabled')) { return false; }
+  }
+  return true;
+`;
+
 /** Named keys `press()` understands; anything else is sent as typed. */
 const KEY_MAP: Record<string, string> = {
   Enter: '\n',
@@ -64,7 +78,14 @@ const ANDROID_KEYCODES: Record<string, number> = {
   Tab: 61,
 };
 
-type ElementState = 'attached' | 'visible' | 'hidden';
+type ElementState = 'attached' | 'visible' | 'hidden' | 'enabled' | 'disabled';
+
+/** What the last poll of `waitForState` saw, used to word the timeout. */
+type ObservedState = 'detached' | 'hidden' | 'visible' | 'enabled' | 'disabled';
+
+type StateResult =
+  | { reached: true; elementId: string | null }
+  | { reached: false; observed: ObservedState };
 
 /**
  * Locator methods that build another locator rather than act on the element. They are
@@ -294,58 +315,117 @@ export class Locator {
     }
   }
 
+  /**
+   * Waits for the element to be visible, then returns whether it is enabled right now. Throws
+   * when the element does not become visible within the timeout.
+   */
+  async isEnabled(options?: ActionOptions): Promise<boolean> {
+    const elementId = await this.requireVisibleElementId('isEnabled', options);
+    return await this.readEnabled(elementId);
+  }
+
   async waitFor(state: ElementState, options?: ActionOptions): Promise<void> {
-    await this.waitForElementId(state, options);
+    const timeout = this.resolveTimeout(options);
+    const result = await this.waitForState(state, timeout);
+    if (!result.reached) {
+      const what = Locator.describeTimeout(state, result.observed);
+      throw new TimeoutError(`Element ${this.named} ${what} after ${timeout}ms`);
+    }
   }
 
   /**
-   * Polls until the element is in `state`, then returns the reference id of the element the
-   * poll found there (`null` for 'hidden', which nothing need match), so an action can use it
-   * without looking the element up again. `timeout: 0` makes a single attempt.
+   * Polls until the element reaches `state`. Once it does, resolves with the reference id of the
+   * element the poll found there (`null` for 'hidden', which nothing need match), so an action can
+   * use it without looking the element up again; when the timeout runs out, with what the last
+   * poll saw. `'enabled'` and `'disabled'` both require the element to be visible. `timeout: 0`
+   * makes a single attempt.
    */
-  private async waitForElementId(
-    state: ElementState,
-    options?: ActionOptions,
-  ): Promise<string | null> {
-    const timeout = options?.timeout ?? this.timeoutOpts.expectTimeout;
-    return await this.waitUntil(async () => {
-      const element = await this.getElement();
-      const elementId = element?.[ELEMENT_REFERENCE_ID];
+  private async waitForState(state: ElementState, timeout: number): Promise<StateResult> {
+    let observed = 'detached' as ObservedState;
+    try {
+      const elementId = await this.waitUntil(async () => {
+        const element = await this.getElement();
+        const elementId = element?.[ELEMENT_REFERENCE_ID];
 
-      if (!elementId) {
-        // Nothing matches: that is exactly 'hidden', and not yet 'attached' or 'visible'.
-        return state === 'hidden' ? null : false;
-      }
-
-      if (state === 'attached') {
-        return elementId;
-      }
-
-      let isDisplayed: boolean;
-      try {
-        isDisplayed = await this.webDriverClient.isElementDisplayed(elementId);
-      } catch (error) {
-        //@ts-ignore
-        const errName = error.name;
-        if (errName && errName.includes(WebDriverErrors.StaleElementReferenceError)) {
-          // A stale node is being re-rendered, not gone: re-find on the next tick for every
-          // state, so a transient stale read never counts as "hidden".
-          throw new RetryableError(`Stale element detected: ${error}`);
+        if (!elementId) {
+          // Nothing matches: that is exactly 'hidden', and no other state.
+          observed = 'detached';
+          return state === 'hidden' ? null : false;
         }
-        throw error;
-      }
 
-      if (state === 'hidden') {
-        return isDisplayed ? false : null;
-      }
-      return isDisplayed ? elementId : false;
-    }, timeout).catch((error: unknown) => {
+        if (state === 'attached') {
+          return elementId;
+        }
+
+        const isDisplayed = await this.retryIfStale(() =>
+          this.webDriverClient.isElementDisplayed(elementId),
+        );
+        observed = isDisplayed ? 'visible' : 'hidden';
+        if (state === 'hidden') {
+          return isDisplayed ? false : null;
+        }
+        if (!isDisplayed || state === 'visible') {
+          return isDisplayed ? elementId : false;
+        }
+
+        const isEnabled = await this.retryIfStale(() => this.readEnabled(elementId));
+        observed = isEnabled ? 'enabled' : 'disabled';
+        return isEnabled === (state === 'enabled') ? elementId : false;
+      }, timeout);
+      return { reached: true, elementId };
+    } catch (error) {
       if (error instanceof TimeoutError) {
-        const what = state === 'hidden' ? 'was still on the screen' : `did not become ${state}`;
-        throw new TimeoutError(`Element ${this.named} ${what} after ${timeout}ms`);
+        return { reached: false, observed };
       }
       throw error;
-    });
+    }
+  }
+
+  private static describeTimeout(state: ElementState, observed: ObservedState): string {
+    if (state === 'hidden') {
+      return 'was still on the screen';
+    }
+    if (state === 'enabled' || state === 'disabled') {
+      if (observed === 'disabled') {
+        return 'is visible but disabled';
+      }
+      if (observed === 'enabled') {
+        return 'is visible but still enabled';
+      }
+      return 'did not become visible';
+    }
+    return `did not become ${state}`;
+  }
+
+  /**
+   * A stale node is being re-rendered, not gone: re-find on the next tick for every state, so a
+   * transient stale read never counts as "hidden" or "disabled".
+   */
+  private async retryIfStale<T>(read: () => Promise<T>): Promise<T> {
+    try {
+      return await read();
+    } catch (error) {
+      //@ts-ignore
+      const errName = error.name;
+      if (errName && errName.includes(WebDriverErrors.StaleElementReferenceError)) {
+        throw new RetryableError(`Stale element detected: ${error}`);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Native elements report through WebDriver's `enabled`; DOM elements also count
+   * `aria-disabled` and disabled ancestors (see WEB_ENABLED_SCRIPT).
+   */
+  private async readEnabled(elementId: string): Promise<boolean> {
+    if (this.isWeb) {
+      const enabled = await this.webDriverClient.executeScript(WEB_ENABLED_SCRIPT, [
+        { [ELEMENT_REFERENCE_ID]: elementId },
+      ]);
+      return enabled !== false;
+    }
+    return await this.webDriverClient.isElementEnabled(elementId);
   }
 
   private async waitUntil<ReturnValue>(
@@ -390,7 +470,7 @@ export class Locator {
 
   @boxedStep
   async tap(options?: ActionOptions) {
-    const elementId = await this.requireVisibleElementId('tap', options);
+    const elementId = await this.requireEnabledElementId('tap', options);
     await this.webDriverClient.elementClick(elementId);
   }
 
@@ -517,20 +597,42 @@ export class Locator {
    * lookup is a full page-source snapshot.
    */
   private async requireVisibleElementId(action: string, options?: ActionOptions): Promise<string> {
-    let elementId: string | null;
-    try {
-      elementId = await this.waitForElementId('visible', options);
-    } catch (error) {
-      if (error instanceof TimeoutError) {
-        throw new Error(`Failed to ${action}: Element ${this.named} not visible`);
-      }
-      throw error;
+    const result = await this.waitForState('visible', this.resolveTimeout(options));
+    if (!result.reached) {
+      throw new Error(`Failed to ${action}: Element ${this.named} not visible`);
     }
+    return Locator.foundElementId(action, this.named, result.elementId);
+  }
+
+  /**
+   * Like `requireVisibleElementId`, but also waits for the element to be enabled within the same
+   * timeout. A disabled control accepts a click and ignores it, so tapping one early fails much
+   * later and somewhere else; this fails here instead, saying the element is disabled.
+   */
+  private async requireEnabledElementId(action: string, options?: ActionOptions): Promise<string> {
+    const timeout = this.resolveTimeout(options);
+    const result = await this.waitForState('enabled', timeout);
+    if (!result.reached) {
+      if (result.observed === 'disabled') {
+        throw new Error(
+          `Failed to ${action}: Element ${this.named} is visible but disabled after ${timeout}ms`,
+        );
+      }
+      throw new Error(`Failed to ${action}: Element ${this.named} not visible`);
+    }
+    return Locator.foundElementId(action, this.named, result.elementId);
+  }
+
+  private static foundElementId(action: string, named: string, elementId: string | null): string {
     if (!elementId) {
-      // Unreachable: a 'visible' wait resolves only with an element.
-      throw new Error(`Failed to ${action}: Element ${this.named} is not found`);
+      // Unreachable: a 'visible' or 'enabled' wait resolves only with an element.
+      throw new Error(`Failed to ${action}: Element ${named} is not found`);
     }
     return elementId;
+  }
+
+  private resolveTimeout(options?: ActionOptions): number {
+    return options?.timeout ?? this.timeoutOpts.expectTimeout;
   }
 
   private async clearElement(elementId: string): Promise<void> {

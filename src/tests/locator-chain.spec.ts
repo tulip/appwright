@@ -22,6 +22,7 @@ function mockClient(overrides: Record<string, unknown> = {}): MockClient {
     executeScript: vi.fn().mockResolvedValue([el('child')]),
     getElementText: vi.fn().mockResolvedValue(''),
     isElementDisplayed: vi.fn().mockResolvedValue(true),
+    isElementEnabled: vi.fn().mockResolvedValue(true),
     elementClick: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   } as MockClient;
