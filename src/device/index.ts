@@ -2,7 +2,6 @@ import { execFile } from 'child_process';
 import path from 'path';
 import { promisify } from 'util';
 import type { Client as WebDriverClient } from 'webdriver';
-import type { z } from 'zod';
 
 import { CHAIN_METHODS, Locator } from '../locator';
 import { LocatorQuery, nativeIdQuery, nativeLabelQuery, nativeTextQuery } from '../locator/queries';
@@ -17,7 +16,6 @@ import {
   BuildInfo,
   DeviceOrientation,
   DragOptions,
-  ExtractType,
   IdOptions,
   LabelOptions,
   NATIVE_CONTEXT,
@@ -30,14 +28,12 @@ import {
   TerminateAppOptions,
   TextOptions,
   TimeoutOptions,
-  VisionModel,
   WaitForAppToCloseOptions,
   WaitForFileOptions,
   WaitForWebPageOptions,
   WebPage,
 } from '../types';
 import { boxedStep, contextName, delay, errorMessage, urlMatches } from '../utils';
-import { AppwrightVision, VisionProvider } from '../vision';
 import { hasLoadedUrl, toWebPages } from './web-pages';
 
 /** Providers whose devices are in a cloud: a local build file cannot be installed on them. */
@@ -219,38 +215,6 @@ export class Device {
   private isAndroid(): boolean {
     return this.getPlatform() == Platform.ANDROID;
   }
-
-  private vision(): AppwrightVision {
-    return new VisionProvider(this, this.webDriverClient);
-  }
-
-  beta = {
-    tap: async (
-      prompt: string,
-      options?: {
-        useCache?: boolean;
-        telemetry?: {
-          tags?: string[];
-        };
-      },
-    ): Promise<{ x: number; y: number }> => {
-      return await this.vision().tap(prompt, options);
-    },
-
-    query: async <T extends z.ZodType>(
-      prompt: string,
-      options?: {
-        responseFormat?: T;
-        model?: VisionModel;
-        screenshot?: string;
-        telemetry?: {
-          tags?: string[];
-        };
-      },
-    ): Promise<ExtractType<T>> => {
-      return await this.vision().query(prompt, options);
-    },
-  };
 
   /**
    * Closes the automation session. This is called automatically after each test.

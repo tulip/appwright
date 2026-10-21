@@ -56,10 +56,10 @@ appwright's own dependencies rather than `npx`, so their bins need not be hoiste
 - `{ timeout: 0 }` on a locator wait or action (`isVisible()`, `waitFor()`,
   `expect(…).toBeVisible()`, `tap()`, …) makes a single attempt. It used to fall back to the
   project's `expectTimeout`. Playwright reads `0` as no timeout instead.
-- `@empiricalrun/llm` is an optional peer dependency, loaded only by `device.beta.query()` and
-  `device.beta.tap()`. Projects that use them must add it with
-  `npm install --save-dev @empiricalrun/llm`. `beta.query()`'s `model` option is typed as a
-  string. `zod` is now a declared dependency.
+- `device.beta.query()` and `device.beta.tap()` are removed, along with the `@empiricalrun/llm`
+  dependency they ran on and the `ExtractType` / `VisionModel` types. Installing appwright no
+  longer pulls in that package's AI SDKs, AWS SDK and `sharp`. There is no replacement: a test
+  that used them taps a locator or reads its text instead.
 - `device.getById()` no longer filters several matches by their text, which is not the id: two
   nodes sharing an id used to resolve to no element at all.
 - `editable: true` (`getByLabel()`, `getById()`) also matches Android's autocomplete fields, which
