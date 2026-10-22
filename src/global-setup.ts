@@ -53,44 +53,7 @@ async function globalSetup(config: FullConfig<AppwrightConfig>) {
   let appiumProcess: ChildProcess | undefined;
   let usedEmulatorProvider = false;
 
-  for (let i = 0; i < config.projects.length; i++) {
-    const project = config.projects[i]!;
-    if (!projects.includes(project.name)) {
-      continue;
-    }
-    const providerName = project.use.device?.provider;
-    const isLocalProvider = !!providerName && LOCAL_PROVIDERS.includes(providerName);
-
-    if (isLocalProvider) {
-      // Fail fast on a workers/devices mismatch before booting anything.
-      assertWorkersFitDevices(
-        project.use.device as LocalDeviceConfig | EmulatorConfig,
-        config.workers,
-        project.name,
-      );
-    }
-
-    const provider = createDeviceProvider(project);
-    await provider.globalSetup?.({ workers: config.workers });
-
-    if (!isLocalProvider) {
-      continue;
-    }
-    if (providerName === 'emulator') {
-      usedEmulatorProvider = true;
-    }
-
-    const platform = project.use.platform;
-    await ensureDriverInstalled(platform === Platform.ANDROID ? 'uiautomator2' : 'xcuitest');
-
-    if (!appiumProcess) {
-      const server = await startAppiumServerOnFreePort();
-      appiumProcess = server.process;
-      process.env[APPIUM_PORT_ENV] = String(server.port);
-    }
-  }
-
-  return async () => {
+  const teardown = async () => {
     if (appiumProcess) {
       try {
         await stopAppiumServer(appiumProcess);
@@ -106,6 +69,53 @@ async function globalSetup(config: FullConfig<AppwrightConfig>) {
       }
     }
   };
+
+  try {
+    for (let i = 0; i < config.projects.length; i++) {
+      const project = config.projects[i]!;
+      if (!projects.includes(project.name)) {
+        continue;
+      }
+      const providerName = project.use.device?.provider;
+      const isLocalProvider = !!providerName && LOCAL_PROVIDERS.includes(providerName);
+
+      if (isLocalProvider) {
+        // Fail fast on a workers/devices mismatch before booting anything.
+        assertWorkersFitDevices(
+          project.use.device as LocalDeviceConfig | EmulatorConfig,
+          config.workers,
+          project.name,
+        );
+      }
+
+      const provider = createDeviceProvider(project);
+      await provider.globalSetup?.({ workers: config.workers });
+
+      if (!isLocalProvider) {
+        continue;
+      }
+      if (providerName === 'emulator') {
+        usedEmulatorProvider = true;
+      }
+
+      const platform = project.use.platform;
+      await ensureDriverInstalled(platform === Platform.ANDROID ? 'uiautomator2' : 'xcuitest');
+
+      if (!appiumProcess) {
+        const server = await startAppiumServerOnFreePort();
+        appiumProcess = server.process;
+        process.env[APPIUM_PORT_ENV] = String(server.port);
+      }
+    }
+  } catch (error) {
+    // Playwright's teardown calls the function globalSetup returns; a throw returns none. So a
+    // failure after Appium started or an emulator booted (e.g. a later project failing
+    // validation) cleans up here instead of leaving them running.
+    await teardown();
+    throw error;
+  }
+
+  return teardown;
 }
 
 export default globalSetup;

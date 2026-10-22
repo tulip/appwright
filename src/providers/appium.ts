@@ -39,11 +39,45 @@ function registerExitGuard() {
   exitGuardRegistered = true;
   process.on('exit', () => {
     const proc = trackedAppiumProcess;
-    if (proc && proc.exitCode === null && !proc.killed) {
+    // `proc.killed` only means a signal was delivered, not that the process is gone: a server
+    // that ignored teardown's SIGTERM still has to be killed here.
+    if (proc && proc.exitCode === null && proc.signalCode === null) {
       logger.log('Main process exiting. Killing Appium server...');
+      // An 'exit' listener cannot wait for a graceful shutdown. SIGKILL reaches Appium itself
+      // because it is spawned directly (see startAppiumServer), so its port is freed.
       proc.kill('SIGKILL');
     }
   });
+}
+
+/**
+ * Absolute path of the Appium CLI entry point (`bin.appium` in its package.json). Looks in
+ * `searchPaths` in order: by default the working directory first, which finds the same Appium
+ * `npx appium` (and so `ensureDriverInstalled`) uses, then appwright's own dependency.
+ */
+export function resolveAppiumEntry(searchPaths: string[] = [process.cwd(), __dirname]): string {
+  const packageJsonPath = require.resolve('appium/package.json', { paths: searchPaths });
+  const { bin } = require(packageJsonPath) as { bin?: string | Record<string, string> };
+  const entry = typeof bin === 'string' ? bin : bin?.appium ?? 'index.js';
+  return path.resolve(path.dirname(packageJsonPath), entry);
+}
+
+/**
+ * What a chunk of Appium output means for startup: the port was taken, the server is ready, or
+ * neither. Matches on Appium's log text, so a change to those messages turns a port clash into
+ * the startup timeout and a missed ready line into the same timeout.
+ */
+export function classifyAppiumOutput(output: string): 'port-in-use' | 'ready' | undefined {
+  if (
+    output.includes('EADDRINUSE') ||
+    output.includes('The requested port may already be in use')
+  ) {
+    return 'port-in-use';
+  }
+  if (output.includes(APPIUM_READY_MARKER)) {
+    return 'ready';
+  }
+  return undefined;
 }
 
 function listenOn(port: number): Promise<number> {
@@ -100,14 +134,22 @@ function forwardLines(prefix: string, data: Buffer, log: (...args: any[]) => voi
  * Spawns one Appium server on `port` and resolves with the child process once the REST
  * listener is up. Rejects on EADDRINUSE, spawn errors, or if the process exits before it is ready.
  * Never passes `--session-override` (it would delete every other live session on a new session).
+ *
+ * Appium's entry point is run with this Node binary rather than through `npx appium`: `npx` is an
+ * `npm exec` wrapper that does not forward SIGKILL, so killing it left Appium listening on its port.
  */
 export async function startAppiumServer(port: number): Promise<ChildProcess> {
   return new Promise<ChildProcess>((resolve, reject) => {
     let settled = false;
     // https://github.com/appium/appium-uiautomator2-driver?tab=readme-ov-file#automatic-discovery-of-compatible-chromedriver
     const appiumProcess = spawn(
-      'npx',
-      ['appium', '--port', String(port), '--allow-insecure=uiautomator2:chromedriver_autodownload'],
+      process.execPath,
+      [
+        resolveAppiumEntry(),
+        '--port',
+        String(port),
+        '--allow-insecure=uiautomator2:chromedriver_autodownload',
+      ],
       {
         stdio: 'pipe',
       },
@@ -142,15 +184,16 @@ export async function startAppiumServer(port: number): Promise<ChildProcess> {
     }
 
     function inspectOutput(output: string) {
-      if (
-        output.includes('EADDRINUSE') ||
-        output.includes('The requested port may already be in use')
-      ) {
-        fail(new AppiumPortInUseError(port));
-        appiumProcess.kill('SIGKILL');
+      // Once started (or failed), later output is only logged: a session's own EADDRINUSE
+      // (chromedriver, a forwarded port) must not kill the running shared server.
+      if (settled) {
         return;
       }
-      if (output.includes(APPIUM_READY_MARKER)) {
+      const state = classifyAppiumOutput(output);
+      if (state === 'port-in-use') {
+        fail(new AppiumPortInUseError(port));
+        appiumProcess.kill('SIGKILL');
+      } else if (state === 'ready') {
         succeed();
       }
     }
