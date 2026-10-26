@@ -255,7 +255,9 @@ describe('webView.attach', () => {
 
   test('a dead session fails at once', async () => {
     const client = mockClient();
+    // Appium's own session is gone: every command fails, including asking for the context.
     (client.switchAppiumContext as Mock).mockRejectedValue(new Error('invalid session id'));
+    (client.getAppiumContext as Mock).mockRejectedValue(new Error('invalid session id'));
     await expect(webView(client).attach({ timeout: 60_000 })).rejects.toThrow('invalid session id');
     expect(client.switchAppiumContext).toHaveBeenCalledTimes(1);
   });
@@ -316,6 +318,92 @@ describe('WebView discovery', () => {
       `[WebView] Skipping WEBVIEW_com.other.app: not ${APP}'s, the app in front.`,
     );
     log.mockRestore();
+  });
+});
+
+describe('a dropped WebView renderer', () => {
+  const DROPPED = new Error(
+    'invalid session id: session deleted as the browser has closed the connection',
+  );
+  const ELEMENT = { 'element-6066-11e4-a52e-4f735466cecf': 'el' };
+
+  /**
+   * A WebView whose renderer drops at the first page lookup: chromedriver then fails every
+   * lookup until the session hops through NATIVE_APP, which makes Appium start a new one.
+   */
+  function droppingClient(isAndroid: boolean): MockClient {
+    const client = mockClient({ isAndroid });
+    const executeScript = (client.executeScript as Mock).getMockImplementation()!;
+    const switchContext = (client.switchAppiumContext as Mock).getMockImplementation()!;
+    let state: 'live' | 'dead' | 'restarted' = 'live';
+    (client.switchAppiumContext as Mock).mockImplementation(async (name: string) => {
+      if (name === 'NATIVE_APP' && state === 'dead') {
+        state = 'restarted';
+      }
+      return switchContext(name);
+    });
+    (client.executeScript as Mock).mockImplementation(async (script: string, args: unknown[]) => {
+      if (script.includes('querySelectorAll')) {
+        if (state === 'live') {
+          state = 'dead';
+        }
+        if (state === 'dead') {
+          throw DROPPED;
+        }
+        return [ELEMENT];
+      }
+      return executeScript(script, args);
+    });
+    Object.assign(client, {
+      isElementDisplayed: vi.fn().mockResolvedValue(true),
+      elementClick: vi.fn().mockResolvedValue(undefined),
+    });
+    return client;
+  }
+
+  test('Android: an action re-attaches through NATIVE_APP and goes on', async () => {
+    const client = droppingClient(true);
+    vi.useFakeTimers();
+    const tapped = webView(client).getByRole('button', { name: 'Save' }).tap();
+    await vi.runAllTimersAsync();
+    await tapped;
+
+    expect(switches(client)).toEqual([`WEBVIEW_${APP}`, 'NATIVE_APP', `WEBVIEW_${APP}`]);
+    expect(client.elementClick).toHaveBeenCalledWith('el');
+  });
+
+  test('iOS: the same error means the session is gone, and fails the action', async () => {
+    const client = droppingClient(false);
+    await expect(webView(client).getByRole('button', { name: 'Save' }).tap()).rejects.toThrow(
+      'invalid session id',
+    );
+    expect(switches(client)).not.toContain('NATIVE_APP');
+  });
+
+  test("Android: when Appium's session is gone too, it still fails at once", async () => {
+    const client = droppingClient(true);
+    await webView(client).attach();
+    (client.getAppiumContext as Mock).mockRejectedValue(DROPPED);
+    await expect(webView(client).getByRole('button', { name: 'Save' }).tap()).rejects.toThrow(
+      'invalid session id',
+    );
+  });
+
+  test('attach() keeps trying through a renderer drop', async () => {
+    const client = mockClient();
+    const executeScript = (client.executeScript as Mock).getMockImplementation()!;
+    let dropped = false;
+    (client.executeScript as Mock).mockImplementation(async (script: string, args: unknown[]) => {
+      if (!dropped && script.includes('readyState')) {
+        dropped = true;
+        throw DROPPED;
+      }
+      return executeScript(script, args);
+    });
+    vi.useFakeTimers();
+    const attached = webView(client).attach();
+    await vi.runAllTimersAsync();
+    expect(await attached).toBe(`WEBVIEW_${APP}`);
   });
 });
 

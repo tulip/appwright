@@ -9,7 +9,9 @@ WebDriver client or by guessing from the host.
 session to a live page after the app reloads or rebuilds its WebView, after a relaunch, or in a
 browser it handed off to. Other `webView` calls only check that some WEBVIEW context is current,
 which stays true once the page behind it is gone. With a Chrome Custom Tab in front, discovery now
-finds Chrome's `WEBVIEW_chrome` context instead of nothing.
+finds Chrome's `WEBVIEW_chrome` context instead of nothing. On Android, when a WebView's renderer
+drops its connection and chromedriver answers `invalid session id` while Appium's session lives
+on, `webView` actions and `attach()` re-attach and retry instead of failing.
 `webView.getByRole(role, { name, exact, level })` matches ARIA roles, explicit and implicit, by
 accessible name. Locators chain: `getByText`, `getByRole`, `getByLabel` and `getByTestId` on a
 locator look inside its element. `getByTestId()` and `getByPlaceholder()` escape quotes.

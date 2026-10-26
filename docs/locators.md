@@ -312,6 +312,8 @@ const color = await webView.evaluate(() => {
 
 `webView` binds a WEBVIEW context the first time it is used and then only checks that _some_ WEBVIEW context is current, which stays true after the page behind it is gone: the app reloaded or rebuilt its WebView, relaunched, or handed off to a browser. Call `webView.attach()` at those points to bind a live page again. It hops to `NATIVE_APP` and back on every attempt (Appium skips its own dead-page check when asked for the context it is already in) and retries until the page's `document.readyState` is `interactive` or `complete` and `probeSelector`, if given, is in its DOM. It returns the context it bound.
 
+On Android, a WebView's renderer can drop its DevTools connection mid-test, and chromedriver then answers every command with `invalid session id` although Appium's session is fine. `webView` locator actions and `attach()` recover from that by hopping to `NATIVE_APP` and back, which makes Appium start a new chromedriver session, and then retry. When Appium's own session is gone too, or on iOS, where the error always means the session is gone, they fail at once.
+
 ```ts
 // The app reloaded behind a login: wait for the new page's login field.
 await webView.attach({ probeSelector: '[data-testid="login-field"]' });

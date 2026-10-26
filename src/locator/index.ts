@@ -376,6 +376,12 @@ export class Locator {
                 'NoSuchWindowError',
               );
             }
+            // No lookup succeeds on a session the driver has deleted: give up at once, so the
+            // WebView can re-attach after a renderer drop (see `RENDERER_DROP_ERROR` there)
+            // rather than after the whole timeout. Matched on the driver's error text.
+            if (error instanceof Error && error.message.includes('invalid session id')) {
+              throw new NonRetryableError(error.message, error.name);
+            }
             throw error;
           }
         },

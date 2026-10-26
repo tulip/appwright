@@ -21,7 +21,7 @@ import {
   TextOptions,
   WebPage,
 } from '../types';
-import { NonRetryableError } from '../types/errors';
+import { NonRetryableError, RetryableError } from '../types/errors';
 import {
   boxedStep,
   contextName,
@@ -58,6 +58,17 @@ const FATAL_SESSION_ERRORS = [
   'A session is either terminated or not started',
   'ECONNREFUSED',
 ];
+
+/**
+ * What chromedriver answers once a WebView's renderer has dropped its DevTools connection
+ * ("session deleted as the browser has closed the connection"). On Android it reads like a dead
+ * session, but only the chromedriver session behind the WEBVIEW context is gone: Appium's own
+ * session still answers, and switching to NATIVE_APP and back makes Appium start a new
+ * chromedriver. `isRendererDrop()` tells the two apart by asking Appium. Matched against the
+ * error text, the only signal there is; if the wording changes, a renderer drop fails the test
+ * as it did before this recovery existed.
+ */
+const RENDERER_DROP_ERROR = 'invalid session id';
 
 const ATTACH_TIMEOUT_MS = 60_000;
 const ATTACH_POLL_INTERVAL_MS = 1_000;
@@ -170,7 +181,10 @@ export class WebView {
         console.log('[WebView] Attached to', target);
         return target;
       } catch (error) {
-        if (FATAL_SESSION_ERRORS.some((fatal) => errorMessage(error).includes(fatal))) {
+        if (
+          FATAL_SESSION_ERRORS.some((fatal) => errorMessage(error).includes(fatal)) &&
+          !(await this.isRendererDrop(error))
+        ) {
           throw error;
         }
         lastError = error;
@@ -285,8 +299,31 @@ export class WebView {
   }
 
   /**
+   * Whether `error` is chromedriver's session dying with the page's renderer while Appium's
+   * session lives on (see `RENDERER_DROP_ERROR`). Android only: on iOS the WebView is driven by
+   * XCUITest itself, so "invalid session id" means the session is gone.
+   */
+  private async isRendererDrop(error: unknown): Promise<boolean> {
+    if (
+      this.device.getPlatform() != Platform.ANDROID ||
+      !errorMessage(error).includes(RENDERER_DROP_ERROR)
+    ) {
+      return false;
+    }
+    try {
+      await this.device.getCurrentContext();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * Helper method to recover from window closure by resetting WebView context.
    * Uses async-retry to handle transient failures.
+   *
+   * A renderer drop on Android (see `RENDERER_DROP_ERROR`) is recovered the same way: hopping
+   * through NATIVE_APP makes Appium replace the dead chromedriver session.
    */
   private async recoverFromWindowClosure<T>(operation: () => Promise<T>): Promise<T> {
     return await retry(
@@ -294,6 +331,13 @@ export class WebView {
         try {
           return await operation();
         } catch (error) {
+          if (await this.isRendererDrop(error)) {
+            console.log('[WebView] The WebView renderer dropped its connection. Re-attaching...');
+            await this.device.switchContext('NATIVE_APP');
+            await this.ensureWebViewContext();
+            // The locator gave up on the dead session; this attempt may retry on the new one.
+            throw new RetryableError(errorMessage(error));
+          }
           if (!isNoSuchWindowError(error)) {
             // We don't want to retry all errors. Only those related to window closure
             throw new NonRetryableError(
