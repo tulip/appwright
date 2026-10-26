@@ -5,7 +5,7 @@ import path from 'path';
 import { promisify } from 'util';
 
 import { logger } from '../logger';
-import { getLatestBuildToolsVersions } from '../utils';
+import { errorMessage, getLatestBuildToolsVersions } from '../utils';
 
 const execPromise = promisify(exec);
 const execFilePromise = promisify(execFile);
@@ -344,8 +344,16 @@ export function getAppBundleId(filePath: string): Promise<string> {
     const absolutePath = path.resolve(filePath);
 
     if (filePath.endsWith('.ipa')) {
-      // Stream Info.plist from ZIP to plutil
-      command = `unzip -p "${absolutePath}" "Payload/*.app/Info.plist" | plutil -convert xml1 -o - - | grep -A1 "CFBundleIdentifier" | grep string | sed 's/<[^>]*>//g'`;
+      readIpaInfoPlist(absolutePath)
+        .then((plist) =>
+          runCommand('plutil', ['-extract', 'CFBundleIdentifier', 'raw', '-o', '-', '-'], plist),
+        )
+        .then((stdout) => {
+          const bundleId = stdout.toString().trim();
+          bundleId ? resolve(bundleId) : reject(new Error('Bundle ID empty'));
+        })
+        .catch((error) => reject(new Error(`Failed to get ID: ${errorMessage(error)}`)));
+      return;
     } else if (filePath.endsWith('.app')) {
       // Use plutil -extract for .app folders
       const plistPath = path.join(absolutePath, 'Info.plist');
@@ -527,6 +535,24 @@ function runCommand(command: string, args: string[], input?: Buffer): Promise<Bu
   });
 }
 
+/**
+ * The main app's `Info.plist` among an `.ipa`'s entries. Nested bundles (a Watch app, an App
+ * Clip, extensions) carry their own one further down, and unzip's `*` matches `/` too, so a
+ * `Payload/*.app/Info.plist` pattern would pick those up as well.
+ */
+export function findIpaInfoPlist(entries: string[]): string | undefined {
+  return entries.find((entry) => /^Payload\/[^/]+\.app\/Info\.plist$/.test(entry));
+}
+
+async function readIpaInfoPlist(ipa: string): Promise<Buffer> {
+  const entries = (await runCommand('unzip', ['-Z1', ipa])).toString().split('\n');
+  const entry = findIpaInfoPlist(entries);
+  if (!entry) {
+    throw new Error(`${ipa} has no Payload/<name>.app/Info.plist.`);
+  }
+  return await runCommand('unzip', ['-p', ipa, entry]);
+}
+
 /** The fields of the `package:` line of `aapt dump badging`. */
 export function parseApkBadging(badging: string): {
   packageName?: string;
@@ -575,7 +601,7 @@ export async function readBuildInfo(buildPath: string): Promise<{
   if (absolute.endsWith('.app')) {
     plist = await fs.readFile(path.join(absolute, 'Info.plist'));
   } else if (absolute.endsWith('.ipa')) {
-    plist = await runCommand('unzip', ['-p', absolute, 'Payload/*.app/Info.plist']);
+    plist = await readIpaInfoPlist(absolute);
   } else {
     throw new Error(`Cannot read build info from ${absolute}: use an .app, .ipa or .apk.`);
   }
