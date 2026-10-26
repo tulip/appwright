@@ -401,8 +401,25 @@ export function queryDom(root: Element | null, query: DomQuery): Element[] {
     );
   }
 
+  /**
+   * Every element under `scope`, open shadow roots included, each host followed by its shadow
+   * tree: web-component apps (Ionic, Stencil) keep the real `<button>` or `<input>` in there.
+   * Closed shadow roots cannot be read from the page.
+   */
+  function collect(scope: Document | Element | ShadowRoot, into: Element[]): Element[] {
+    const found = scope.querySelectorAll('*');
+    for (let i = 0; i < found.length; i++) {
+      const el = found[i]!;
+      into.push(el);
+      if (el.shadowRoot) {
+        collect(el.shadowRoot, into);
+      }
+    }
+    return into;
+  }
+
   const scope: Document | Element = root || doc;
-  const all = scope.querySelectorAll('*');
+  const all = collect(scope, []);
   const result: Element[] = [];
 
   if (query.kind === 'text') {

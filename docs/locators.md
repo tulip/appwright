@@ -208,7 +208,7 @@ await webView.getByTestId('username-input').fill('admin');
 
 ### Get an element by Text
 
-Select elements by their text the way Playwright's `getByText` does: the element whose whitespace-normalised text matches while none of its children's does. `<li><b>Device</b></li>` yields the `<b>`, not the `<li>` and every ancestor up to `<body>`. Text in `<script>`, `<style>` and `<head>` (so the page title) never matches, and an `<input type="submit">` matches by its value.
+Select elements by their text the way Playwright's `getByText` does: the element whose whitespace-normalised text matches while none of its children's does. `<li><b>Device</b></li>` yields the `<b>`, not the `<li>` and every ancestor up to `<body>`. Text in `<script>`, `<style>` and `<head>` (so the page title) never matches, and an `<input type="submit">` matches by its value. Both `getByText` and `getByRole` also search open shadow roots, as Playwright does; closed ones cannot be read from the page.
 
 ```ts
 await webView.getByText('Welcome').tap();

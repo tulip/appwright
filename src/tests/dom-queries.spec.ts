@@ -170,6 +170,14 @@ describe('getByRole in a WebView', () => {
     expect(ids(byRole('textbox', { name: 'Notes' }))).toEqual(['notes']);
   });
 
+  test('looks inside open shadow roots', () => {
+    render('<div id="host"></div>');
+    const shadow = document.getElementById('host')!.attachShadow({ mode: 'open' });
+    shadow.innerHTML = '<button id="inner">Shadow</button>';
+    expect(ids(byRole('button', { name: 'Shadow' }))).toEqual(['inner']);
+    expect(ids(byText('Shadow'))).toEqual(['inner']);
+  });
+
   test('a hidden child does not contribute to the name', () => {
     render('<button id="b">Save<span style="display: none"> draft</span></button>');
     expect(ids(byRole('button', { name: 'Save' }))).toEqual(['b']);
