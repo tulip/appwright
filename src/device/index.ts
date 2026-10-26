@@ -1,8 +1,5 @@
 import path from 'path';
 import type { Client as WebDriverClient } from 'webdriver';
-import { z } from 'zod';
-
-import { LLMModel } from '@empiricalrun/llm';
 
 import { Locator } from '../locator';
 import { logger } from '../logger';
@@ -10,7 +7,6 @@ import { uploadImageToBS } from '../providers/browserstack/utils';
 import { uploadImageToLambdaTest } from '../providers/lambdatest/utils';
 import {
   AppwrightLocator,
-  ExtractType,
   LabelOptions,
   NATIVE_CONTEXT,
   OpenUrlOptions,
@@ -20,7 +16,6 @@ import {
   WaitForFileOptions,
 } from '../types';
 import { boxedStep, delay, escapeQuotes, escapeRegExp, longestDeterministicGroup } from '../utils';
-import { AppwrightVision, VisionProvider } from '../vision';
 
 /** Providers whose devices are in a cloud: a local build file cannot be installed on them. */
 const CLOUD_PROVIDERS = ['browserstack', 'lambdatest'];
@@ -129,38 +124,6 @@ export class Device {
     });
     return this.wrapWithNativeContext(originalLocator);
   }
-
-  private vision(): AppwrightVision {
-    return new VisionProvider(this, this.webDriverClient);
-  }
-
-  beta = {
-    tap: async (
-      prompt: string,
-      options?: {
-        useCache?: boolean;
-        telemetry?: {
-          tags?: string[];
-        };
-      },
-    ): Promise<{ x: number; y: number }> => {
-      return await this.vision().tap(prompt, options);
-    },
-
-    query: async <T extends z.ZodType>(
-      prompt: string,
-      options?: {
-        responseFormat?: T;
-        model?: LLMModel;
-        screenshot?: string;
-        telemetry?: {
-          tags?: string[];
-        };
-      },
-    ): Promise<ExtractType<T>> => {
-      return await this.vision().query(prompt, options);
-    },
-  };
 
   /**
    * Closes the automation session. This is called automatically after each test.

@@ -1,8 +1,4 @@
-import { z } from 'zod';
-
 import { Device } from '../device';
-
-export type ExtractType<T> = T extends z.ZodType ? z.infer<T> : never;
 
 export type ActionOptions = {
   timeout: number;
