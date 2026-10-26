@@ -296,8 +296,12 @@ export function queryDom(root: Element | null, query: DomQuery): Element[] {
     return roleOf(el) === 'heading' ? 2 : undefined;
   }
 
-  /** The name an element contributes from its content: text, plus children's labels and alts. */
-  function contentName(el: Element, includeHidden: boolean): string {
+  /**
+   * The name an element contributes from its content: text, plus children's labels and alts.
+   * `labelled` is the control a `<label>` is being read for: when the label wraps it, its own
+   * content (a select's options, a textarea's text) is not part of its name.
+   */
+  function contentName(el: Element, includeHidden: boolean, labelled?: Element): string {
     let out = '';
     for (let child = el.firstChild; child; child = child.nextSibling) {
       if (child.nodeType === 3) {
@@ -308,7 +312,7 @@ export function queryDom(root: Element | null, query: DomQuery): Element[] {
         continue;
       }
       const element = child as Element;
-      if (holdsNoText(element) || (!includeHidden && isHidden(element))) {
+      if (element === labelled || holdsNoText(element) || (!includeHidden && isHidden(element))) {
         continue;
       }
       const tag = tagOf(element);
@@ -321,7 +325,7 @@ export function queryDom(root: Element | null, query: DomQuery): Element[] {
       } else if (isTextButton(element)) {
         piece = element.value;
       } else {
-        piece = contentName(element, includeHidden);
+        piece = contentName(element, includeHidden, labelled);
       }
       out += isBlock(element) ? ' ' + piece + ' ' : piece;
     }
@@ -340,7 +344,7 @@ export function queryDom(root: Element | null, query: DomQuery): Element[] {
     if (labels && labels.length > 0) {
       const parts: string[] = [];
       for (let i = 0; i < labels.length; i++) {
-        parts.push(contentName(labels[i]!, false));
+        parts.push(contentName(labels[i]!, false, el));
       }
       const fromLabels = normalize(parts.join(' '));
       if (fromLabels) {

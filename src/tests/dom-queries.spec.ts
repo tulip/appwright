@@ -162,6 +162,14 @@ describe('getByRole in a WebView', () => {
     expect(ids(byRole('button', { name: 'Close' }))).toEqual(['t']);
   });
 
+  test('a control inside its own <label> leaves its content out of its name', () => {
+    render(`
+      <label>Country <select id="country"><option>US</option><option>CA</option></select></label>
+      <label>Notes <textarea id="notes">prefilled</textarea></label>`);
+    expect(ids(byRole('combobox', { name: 'Country' }))).toEqual(['country']);
+    expect(ids(byRole('textbox', { name: 'Notes' }))).toEqual(['notes']);
+  });
+
   test('a hidden child does not contribute to the name', () => {
     render('<button id="b">Save<span style="display: none"> draft</span></button>');
     expect(ids(byRole('button', { name: 'Save' }))).toEqual(['b']);
