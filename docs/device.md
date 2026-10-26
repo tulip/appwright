@@ -28,8 +28,9 @@ names, container paths, what a real device allows) are handled inside.
 
 - `device.getBuildInfo(buildPath?)` — what the project's build file declares: `bundleId`,
   `version` (`CFBundleShortVersionString` / `versionName`), `buildNumber` (`CFBundleVersion` /
-  `versionCode`) and `path`, read on the host from the `.app`, `.ipa` or `.apk` (an `.apk` needs
-  `ANDROID_HOME`, for `aapt`). Compare it with the version the app shows.
+  `versionCode`) and `path`, read on the host from a local `.app`, `.ipa` or `.apk` (an `.apk` needs
+  `ANDROID_HOME`, for `aapt`; an `.app` or `.ipa` needs macOS, for `plutil`). A cloud upload id
+  such as `bs://…` cannot be read: pass the local build. Compare it with the version the app shows.
 
 ## Which device this is
 

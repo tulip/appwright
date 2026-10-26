@@ -30,6 +30,28 @@ describe('findIpaInfoPlist', () => {
   });
 });
 
+describe('readBuildInfo errors', () => {
+  test('a cloud upload id or URL is refused, naming what to pass', async () => {
+    for (const remote of ['bs://abc123', 'lt://APP1', 'https://cdn.example.com/app.ipa']) {
+      await expect(readBuildInfo(remote)).rejects.toThrow(
+        `Cannot read build info from ${remote}: it is read on this host`,
+      );
+    }
+  });
+
+  test('an .apk without ANDROID_HOME names the variable', async () => {
+    const androidHome = process.env.ANDROID_HOME;
+    delete process.env.ANDROID_HOME;
+    try {
+      await expect(readBuildInfo('app.apk')).rejects.toThrow('set ANDROID_HOME');
+    } finally {
+      if (androidHome !== undefined) {
+        process.env.ANDROID_HOME = androidHome;
+      }
+    }
+  });
+});
+
 // plutil only exists on macOS, where iOS builds are read.
 describe.runIf(process.platform === 'darwin')('readBuildInfo on iOS builds', () => {
   let dir: string;

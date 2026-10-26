@@ -596,11 +596,22 @@ export async function readBuildInfo(buildPath: string): Promise<{
   buildNumber: string;
   path: string;
 }> {
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(buildPath)) {
+    throw new Error(
+      `Cannot read build info from ${buildPath}: it is read on this host, so it needs a local ` +
+        '.app, .ipa or .apk rather than a cloud upload id or URL. Pass one to getBuildInfo().',
+    );
+  }
   const absolute = path.resolve(buildPath);
 
   if (absolute.endsWith('.apk')) {
+    if (!process.env.ANDROID_HOME) {
+      throw new Error(
+        `Cannot read build info from ${absolute}: set ANDROID_HOME, whose build-tools hold aapt.`,
+      );
+    }
     const buildToolsVersion = await getLatestBuildToolsVersion();
-    const aapt = path.join(process.env.ANDROID_HOME!, 'build-tools', buildToolsVersion!, 'aapt');
+    const aapt = path.join(process.env.ANDROID_HOME, 'build-tools', buildToolsVersion!, 'aapt');
     const badging = (await runCommand(aapt, ['dump', 'badging', absolute])).toString();
     const { packageName, versionCode, versionName } = parseApkBadging(badging);
     if (!packageName || versionName == null || versionCode == null) {
@@ -614,6 +625,12 @@ export async function readBuildInfo(buildPath: string): Promise<{
     };
   }
 
+  if ((absolute.endsWith('.app') || absolute.endsWith('.ipa')) && process.platform !== 'darwin') {
+    throw new Error(
+      `Cannot read build info from ${absolute}: an iOS build's Info.plist is read with plutil, ` +
+        'which only macOS has.',
+    );
+  }
   let plist: Buffer;
   if (absolute.endsWith('.app')) {
     plist = await fs.readFile(path.join(absolute, 'Info.plist'));
