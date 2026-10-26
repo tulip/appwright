@@ -85,6 +85,23 @@ describe('chaining native locators', () => {
     );
   });
 
+  test("moves on to the parent's next match when none of its children pass the text check", async () => {
+    const texts: Record<string, string> = { a1: 'Item list', a2: 'Item header', b1: 'Item 2' };
+    const client = mockClient({
+      findElements: vi.fn().mockResolvedValue([el('rowB'), el('rowA')]),
+      findElementsFromElement: vi
+        .fn()
+        .mockImplementation(async (root: string) =>
+          root === 'rowA' ? [el('a1'), el('a2')] : [el('b1')],
+        ),
+      getElementText: vi.fn().mockImplementation(async (id: string) => texts[id]),
+    });
+    const item = device(client)
+      .getById('row')
+      .getByText(/(Item )\d+/);
+    expect(await item.getElement()).toEqual(el('b1'));
+  });
+
   test('no parent match means no child match, without looking further', async () => {
     const client = mockClient({ findElements: vi.fn().mockResolvedValue([]) });
     await device(client).getById('dialog').getByText('OK').waitFor('hidden');
@@ -117,10 +134,7 @@ describe('chaining WebView locators', () => {
 
   test('a script query receives the parent element as its root', async () => {
     const client = mockClient();
-    await webView(client)
-      .getByTestId('main-menu')
-      .getByRole('button', { name: 'Settings' })
-      .tap();
+    await webView(client).getByTestId('main-menu').getByRole('button', { name: 'Settings' }).tap();
 
     expect(client.findElements).toHaveBeenCalledWith('css selector', '[data-testid="main-menu"]');
     const [script, args] = (client.executeScript as Mock).mock.calls[0]!;

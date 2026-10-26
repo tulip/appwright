@@ -459,9 +459,30 @@ export class Locator {
     return null;
   }
 
-  /** Every element this locator matches, the one `getElement()` returns first. */
+  /**
+   * Every element this locator matches, the one `getElement()` returns first. A chained locator
+   * searches the parent's matches in turn and stops at the first whose subtree has a match after
+   * the text check, so a parent whose children all fail it does not hide the others.
+   */
   private async *matches(): AsyncGenerator<ElementReference> {
-    const elements = await this.findAll();
+    if (!this.parent) {
+      yield* this.matching(await this.findIn(null));
+      return;
+    }
+    for await (const root of this.parent.matches()) {
+      let found = false;
+      for await (const element of this.matching(await this.findIn(root))) {
+        found = true;
+        yield element;
+      }
+      if (found) {
+        return;
+      }
+    }
+  }
+
+  /** Those of `elements` whose text passes `textToMatch`, last first. */
+  private async *matching(elements: ElementReference[]): AsyncGenerator<ElementReference> {
     // A lone match needs no text check when the selector already matched the text. A RegExp
     // only narrows the selector to its longest literal part, or to `//*` with none, so a lone
     // match still has to pass the RegExp: a chained `.//*` under a one-child parent is one.
@@ -469,7 +490,7 @@ export class Locator {
       yield elements[0]!;
       return;
     }
-    for (const element of elements.reverse()) {
+    for (const element of [...elements].reverse()) {
       if (this.textToMatch == null) {
         yield element;
         continue;
@@ -483,19 +504,6 @@ export class Locator {
         yield element;
       }
     }
-  }
-
-  private async findAll(): Promise<ElementReference[]> {
-    if (!this.parent) {
-      return await this.findIn(null);
-    }
-    for await (const root of this.parent.matches()) {
-      const found = await this.findIn(root);
-      if (found.length > 0) {
-        return found;
-      }
-    }
-    return [];
   }
 
   /** Asks the driver for the matches, in document order, under `root` or the whole screen. */
