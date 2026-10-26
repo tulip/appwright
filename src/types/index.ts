@@ -8,6 +8,19 @@ export type ActionOptions = {
   timeout: number;
 };
 
+export type TapOptions = Partial<ActionOptions> & {
+  /**
+   * Skip the actionability checks: tap as soon as the element exists, even if it is hidden or
+   * disabled. Same as Playwright's and Cypress's `force`.
+   */
+  force?: boolean;
+  /**
+   * Run the actionability checks without tapping, like Playwright's `trial`. Resolves once the
+   * element is visible and enabled, and throws the same error a real tap would.
+   */
+  trial?: boolean;
+};
+
 export type FillOptions = Partial<ActionOptions> & {
   /**
    * Treat the value as a secret: the Playwright step title shows `***` instead of the value,
@@ -666,7 +679,15 @@ export enum ScrollDirection {
 
 export interface AppwrightLocator {
   /**
-   * Taps (clicks) on the element. This method waits for the element to be visible before clicking it.
+   * Taps (clicks) on the element. Like Playwright's actionability checks, it first waits within
+   * the timeout for the element to be visible and enabled (see `waitFor('enabled')` for what
+   * counts as disabled), because a disabled control accepts a click and ignores it. When the
+   * element is still disabled at the timeout this throws `Element "…" is visible but disabled`.
+   * If the driver refuses the tap because the element went stale or is covered, the checks run
+   * again within what is left of the timeout.
+   *
+   * Pass `force: true` to tap as soon as the element exists, skipping the checks, or `trial: true`
+   * to run the checks without tapping.
    *
    * **Usage:**
    * ```js
@@ -675,7 +696,7 @@ export interface AppwrightLocator {
    *
    * @param options Use this to override the timeout for this action
    */
-  tap(options?: ActionOptions): Promise<void>;
+  tap(options?: TapOptions): Promise<void>;
 
   /**
    * Fills the input element with the given value. This method waits for the element to be visible before filling it.
@@ -746,23 +767,34 @@ export interface AppwrightLocator {
   sendKeyStrokes(value: string, options?: ActionOptions): Promise<void>;
 
   /**
-   * Wait for the element to be attached, visible or hidden, while attempting for the `timeout`
-   * duration. Throws TimeoutError if the state is not reached within the timeout.
+   * Wait for the element to be attached, visible, hidden, enabled or disabled, while attempting
+   * for the `timeout` duration. Throws TimeoutError if the state is not reached within the timeout.
    *
    * `'hidden'` is satisfied when no element matches or the match is not displayed. A stale
    * element reference is retried rather than read as hidden, so a node that is being re-rendered
    * does not count as gone.
    *
+   * `'enabled'` and `'disabled'` also require the element to be visible. A native element's state
+   * is WebDriver's `enabled`. In a WebView, Playwright's rules apply: an element that is not a form
+   * field is first retargeted to its closest button-like ancestor (so the `<span>` a text locator
+   * finds inside a `<button>` reads the button's state). It is then disabled when it is a natively
+   * `:disabled` control (including inside a disabled `<fieldset>`), or when the nearest
+   * `aria-disabled` on it or an ancestor is `"true"`.
+   *
    * **Usage:**
    * ```js
    * await device.getByText("Search").waitFor("visible");
    * await device.getByText("Loading…").waitFor("hidden");
+   * await webView.getByText("Next").waitFor("enabled");
    * ```
    *
    * @param state The state to wait for
    * @param options Use this to override the timeout for this action
    */
-  waitFor(state: 'attached' | 'visible' | 'hidden', options?: ActionOptions): Promise<void>;
+  waitFor(
+    state: 'attached' | 'visible' | 'hidden' | 'enabled' | 'disabled',
+    options?: ActionOptions,
+  ): Promise<void>;
 
   /**
    * Waits for the element to be visible, while attempting for the `timeout` duration.
@@ -776,6 +808,21 @@ export interface AppwrightLocator {
    * @param options Use this to override the timeout for this action
    */
   isVisible(options?: ActionOptions): Promise<boolean>;
+
+  /**
+   * Waits for the element to be visible, then returns whether it is enabled right now (see
+   * `waitFor('enabled')` for what counts as disabled). Throws when the element does not become
+   * visible within the timeout. To wait for the state instead, use `waitFor('enabled')` or
+   * `expect(locator).toBeEnabled()`.
+   *
+   * **Usage:**
+   * ```js
+   * const canSubmit = await webView.getByText("Submit").isEnabled();
+   * ```
+   *
+   * @param options Use this to override the timeout for this action
+   */
+  isEnabled(options?: ActionOptions): Promise<boolean>;
 
   /**
    * Returns the text content of the element. This method waits for the element to be visible before getting the text.
@@ -854,6 +901,8 @@ export interface AppwrightLocator {
 
 export enum WebDriverErrors {
   StaleElementReferenceError = 'stale element reference',
+  ElementClickInterceptedError = 'element click intercepted',
+  ElementNotInteractableError = 'element not interactable',
 }
 
 export type ElementReferenceId = typeof ELEMENT_REFERENCE_ID;
