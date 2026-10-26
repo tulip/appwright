@@ -151,7 +151,10 @@ describe('webPages / waitForWebPage', () => {
   });
 
   test('a known page that navigated is not new', async () => {
-    const navigated = [IOS_CONTEXTS[0], { ...IOS_CONTEXTS[1], url: 'https://app.example.com/home' }];
+    const navigated = [
+      IOS_CONTEXTS[0],
+      { ...IOS_CONTEXTS[1], url: 'https://app.example.com/home' },
+    ];
     const client = mockClient(false, navigated);
     await expect(
       device(client).waitForWebPage({ notIn: toWebPages(false, IOS_CONTEXTS), timeout: 0 }),
@@ -163,7 +166,7 @@ describe('webPages / waitForWebPage', () => {
   test('a new page that never matches is named in the timeout', async () => {
     const client = mockClient(false, [
       ...IOS_CONTEXTS,
-      { id: 'WEBVIEW_61028.3', url: 'https://www.google.com/' },
+      { id: 'WEBVIEW_61028.3', url: 'https://www.google.com/?code=secret' },
     ]);
     await expect(
       device(client).waitForWebPage({
@@ -172,7 +175,7 @@ describe('webPages / waitForWebPage', () => {
         timeout: 0,
       }),
     ).rejects.toThrow(
-      'no new page with a URL matching .pdf within 0ms. New pages seen: ["https://www.google.com/"]',
+      'no new page with a URL matching .pdf within 0ms. New pages seen: ["https://www.google.com/?…"]',
     );
   });
 });

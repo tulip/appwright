@@ -3,7 +3,7 @@ import { afterEach, describe, expect, Mock, test, vi } from 'vitest';
 import { Client as WebDriverClient } from 'webdriver';
 
 import { Device } from '../device';
-import { urlMatches } from '../utils';
+import { displayUrl, urlMatches } from '../utils';
 import { WebView } from '../webView';
 
 type MockClient = WebDriverClient & Record<string, Mock>;
@@ -122,7 +122,11 @@ describe('webView.attach', () => {
       (client.switchToWindow as Mock).mock.calls.map((c) => c[0]);
 
     test('WebView: picks its window by DevTools id among pages at the same URL', async () => {
-      const devTools = listing(APP_CONTEXT, { id: 'A1', url: MAIN_URL }, { id: 'B2', url: MAIN_URL });
+      const devTools = listing(
+        APP_CONTEXT,
+        { id: 'A1', url: MAIN_URL },
+        { id: 'B2', url: MAIN_URL },
+      );
       const client = mockClient({ pages: { A1: MAIN_URL, B2: MAIN_URL }, devTools });
       expect(await webView(client).attach({ page: REBUILT })).toBe(APP_CONTEXT);
       expect(switches(client)).toEqual(['NATIVE_APP', APP_CONTEXT]);
@@ -137,7 +141,11 @@ describe('webView.attach', () => {
     });
 
     test('WebView: keeps trying while chromedriver lists only the other page', async () => {
-      const devTools = listing(APP_CONTEXT, { id: 'A1', url: MAIN_URL }, { id: 'B2', url: MAIN_URL });
+      const devTools = listing(
+        APP_CONTEXT,
+        { id: 'A1', url: MAIN_URL },
+        { id: 'B2', url: MAIN_URL },
+      );
       const client = mockClient({ pages: { A1: MAIN_URL, B2: MAIN_URL }, devTools });
       (client.getWindowHandles as Mock).mockResolvedValueOnce(['A1']);
       vi.useFakeTimers();
@@ -317,5 +325,18 @@ describe('urlMatches', () => {
     expect(urlMatches('https://app.example.com/main', pattern)).toBe(true);
     expect(urlMatches('https://app.example.com/main', pattern)).toBe(true);
     expect(urlMatches('https://app.example.com/help', pattern)).toBe(false);
+  });
+});
+
+describe('displayUrl', () => {
+  test('drops a query and fragment, marking that it did', () => {
+    expect(displayUrl('https://app.example.com/callback?code=abc&state=x')).toBe(
+      'https://app.example.com/callback?…',
+    );
+    expect(displayUrl('https://app.example.com/#access_token=abc')).toBe(
+      'https://app.example.com/#…',
+    );
+    expect(displayUrl('https://app.example.com/a?b=1#c')).toBe('https://app.example.com/a?…#…');
+    expect(displayUrl('about:blank')).toBe('about:blank');
   });
 });

@@ -17,13 +17,43 @@ function hasSecretOption(args: unknown[]): boolean {
   );
 }
 
+/** A `WebPage` from `device.webPages()`: it carries its URL, which the title should not. */
+function isWebPage(value: unknown): value is { key: string; url: string } {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof (value as { key?: unknown }).key === 'string' &&
+    typeof (value as { url?: unknown }).url === 'string'
+  );
+}
+
 function formatStepArgs(args: unknown[]): string {
   if (!args.length) {
     return '';
   }
   const mask = hasSecretOption(args);
-  const formatted = args.map((a) => (mask && typeof a === 'string' ? '"***"' : JSON.stringify(a)));
+  // A page reads as its key: its URL can carry a sign-in code or token in the query or fragment.
+  const replacer = (_key: string, value: unknown) =>
+    isWebPage(value) ? `page ${value.key}` : value;
+  const formatted = args.map((a) =>
+    mask && typeof a === 'string' ? '"***"' : JSON.stringify(a, replacer),
+  );
   return '(' + formatted.join(' , ') + ')';
+}
+
+/**
+ * A page URL for errors and logs, without its query and fragment: after a sign-in hand-off they
+ * can carry an authorization code or access token, and errors reach the HTML report and the
+ * cloud providers' dashboards. What was dropped is marked with `?…` / `#…`.
+ */
+export function displayUrl(url: string): string {
+  const cut = url.search(/[?#]/);
+  if (cut === -1) {
+    return url;
+  }
+  const query = url.indexOf('?') !== -1 ? '?…' : '';
+  const fragment = url.indexOf('#') !== -1 ? '#…' : '';
+  return url.slice(0, cut) + query + fragment;
 }
 
 function isInsideTest(): boolean {

@@ -33,7 +33,7 @@ import {
   WaitForWebPageOptions,
   WebPage,
 } from '../types';
-import { boxedStep, contextName, delay, errorMessage, urlMatches } from '../utils';
+import { boxedStep, contextName, delay, displayUrl, errorMessage, urlMatches } from '../utils';
 import { hasLoadedUrl, toWebPages } from './web-pages';
 
 /** Providers whose devices are in a cloud: a local build file cannot be installed on them. */
@@ -1626,7 +1626,7 @@ export class Device {
         const wanted = url == null ? 'a loaded URL' : `a URL matching ${String(url)}`;
         throw new Error(
           `waitForWebPage: no new page with ${wanted} within ${timeout}ms. New pages seen: ` +
-            JSON.stringify(fresh.map((page) => page.url)),
+            JSON.stringify(fresh.map((page) => displayUrl(page.url))),
         );
       }
       await delay(pollInterval);

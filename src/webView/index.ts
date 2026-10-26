@@ -26,6 +26,7 @@ import {
   boxedStep,
   contextName,
   delay,
+  displayUrl,
   errorMessage,
   escapeQuotes,
   isNoSuchWindowError,
@@ -232,7 +233,7 @@ export class WebView {
       if (urlMatches(url, pageUrl)) {
         return;
       }
-      seen.push(url);
+      seen.push(displayUrl(url));
     }
     throw new Error(`no page matching ${String(pageUrl)} yet; open pages: ${JSON.stringify(seen)}`);
   }
@@ -277,7 +278,7 @@ export class WebView {
     if (atUrl.length !== 1) {
       throw new Error(
         `no single window for page ${page.key}: none is listed under its id, and ` +
-          `${atUrl.length} are at ${current.url}`,
+          `${atUrl.length} are at ${displayUrl(current.url)}`,
       );
     }
     await this.device.switchToWindow(atUrl[0]!);
