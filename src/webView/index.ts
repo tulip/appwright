@@ -108,7 +108,7 @@ export class WebView {
    * **Usage:**
    * ```js
    * // The app rebuilt its WebView: wait for the login form of the new page.
-   * await webView.attach({ probeSelector: '[data-testid="login-badgeid"]' });
+   * await webView.attach({ probeSelector: '[data-testid="login-field"]' });
    *
    * // Drive the sign-in page a Chrome Custom Tab is showing.
    * await webView.attach({ context: 'WEBVIEW_chrome', pageUrl: '/oauth2/authorize' });
@@ -405,7 +405,7 @@ export class WebView {
    * **Usage:**
    * ```js
    * // Fill an input field
-   * await webView.getByTestId('login-badgeid').fill('0000');
+   * await webView.getByTestId('login-field').fill('0000');
    *
    * // Tap a button
    * await webView.getByTestId('submit-button').tap();

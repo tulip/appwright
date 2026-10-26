@@ -803,7 +803,7 @@ export interface AppwrightLocator {
    *
    * **Usage:**
    * ```js
-   * await webView.getByTestId("player-menu").getByRole("button", { name: "Settings" }).tap();
+   * await webView.getByTestId("main-menu").getByRole("button", { name: "Settings" }).tap();
    * ```
    */
   getByRole(role: AriaRole, options?: RoleOptions): AppwrightLocator;

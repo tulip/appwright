@@ -220,7 +220,7 @@ Turn it off around a step that has to see or answer an alert:
 
 ```ts
 await device.withAlertAutoAccept(false, async () => {
-  await device.getById('clear-instance-button').tap();
+  await device.getById('clear-button').tap();
   await expect.poll(() => device.getAlertText()).toContain('Are you sure?');
   await device.acceptAlert({ buttonLabel: 'Clear Data' });
 });

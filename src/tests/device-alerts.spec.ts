@@ -22,7 +22,7 @@ function mockClient(isAndroid: boolean, overrides: Record<string, unknown> = {})
 }
 
 function device(client: WebDriverClient): Device {
-  return new Device(client, 'co.tulip.player', { expectTimeout: 1_000 }, 'emulator');
+  return new Device(client, 'com.example.app', { expectTimeout: 1_000 }, 'emulator');
 }
 
 const calls = (fn: unknown): unknown[][] => (fn as Mock).mock.calls;
@@ -129,7 +129,7 @@ describe('acceptAlert / dismissAlert / getAlertText', () => {
 
   test('getAlertText reads the native alert, from NATIVE_APP', async () => {
     const client = mockClient(true, {
-      getAppiumContext: vi.fn().mockResolvedValue('WEBVIEW_co.tulip.player'),
+      getAppiumContext: vi.fn().mockResolvedValue('WEBVIEW_com.example.app'),
     });
     expect(await device(client).getAlertText()).toBe('Are you sure?\nThis clears the data.');
     expect(client.switchAppiumContext).toHaveBeenCalledWith('NATIVE_APP');

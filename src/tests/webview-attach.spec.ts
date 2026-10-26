@@ -7,7 +7,7 @@ import { WebView } from '../webView';
 
 type MockClient = WebDriverClient & Record<string, Mock>;
 
-const APP = 'co.tulip.player';
+const APP = 'com.example.app';
 
 type PageState = { readyState?: string; probe?: boolean };
 
@@ -94,10 +94,10 @@ describe('webView.attach', () => {
   test('picks the page whose URL matches, by substring or RegExp', async () => {
     const pages = {
       'CDwindow-1': 'chrome-native://newtab/',
-      'CDwindow-2': 'https://sso.example.com/open-player?x=1',
+      'CDwindow-2': 'https://sso.example.com/open-app?x=1',
     };
     const client = mockClient({ contexts: ['NATIVE_APP', 'WEBVIEW_chrome'], pages });
-    await webView(client).attach({ context: 'WEBVIEW_chrome', pageUrl: '/open-player' });
+    await webView(client).attach({ context: 'WEBVIEW_chrome', pageUrl: '/open-app' });
     expect((client.switchToWindow as Mock).mock.calls.map((c) => c[0])).toEqual([
       'CDwindow-1',
       'CDwindow-2',
@@ -109,9 +109,9 @@ describe('webView.attach', () => {
   });
 
   describe('page', () => {
-    const PLAYER = 'https://acme.tulip.co/player';
+    const MAIN_URL = 'https://app.example.com/main';
     const APP_CONTEXT = `WEBVIEW_${APP}`;
-    const REBUILT = { context: APP_CONTEXT, key: `${APP_CONTEXT}#B2`, url: PLAYER, title: '' };
+    const REBUILT = { context: APP_CONTEXT, key: `${APP_CONTEXT}#B2`, url: MAIN_URL, title: '' };
     /** UiAutomator2's `mobile: getContexts`: one WebView or browser, its DevTools pages nested. */
     const listing =
       (webviewName: string, ...pages: { id: string; url: string }[]) =>
@@ -121,14 +121,14 @@ describe('webView.attach', () => {
       (client.switchToWindow as Mock).mock.calls.map((c) => c[0]);
 
     test('WebView: picks its window by DevTools id among pages at the same URL', async () => {
-      const devTools = listing(APP_CONTEXT, { id: 'A1', url: PLAYER }, { id: 'B2', url: PLAYER });
-      const client = mockClient({ pages: { A1: PLAYER, B2: PLAYER }, devTools });
+      const devTools = listing(APP_CONTEXT, { id: 'A1', url: MAIN_URL }, { id: 'B2', url: MAIN_URL });
+      const client = mockClient({ pages: { A1: MAIN_URL, B2: MAIN_URL }, devTools });
       expect(await webView(client).attach({ page: REBUILT })).toBe(APP_CONTEXT);
       expect(switches(client)).toEqual(['NATIVE_APP', APP_CONTEXT]);
       expect(windows(client)).toEqual(['B2']);
 
       const older = mockClient({
-        pages: { 'CDwindow-A1': PLAYER, 'CDwindow-B2': PLAYER },
+        pages: { 'CDwindow-A1': MAIN_URL, 'CDwindow-B2': MAIN_URL },
         devTools,
       });
       await webView(older).attach({ page: REBUILT });
@@ -136,8 +136,8 @@ describe('webView.attach', () => {
     });
 
     test('WebView: keeps trying while chromedriver lists only the other page', async () => {
-      const devTools = listing(APP_CONTEXT, { id: 'A1', url: PLAYER }, { id: 'B2', url: PLAYER });
-      const client = mockClient({ pages: { A1: PLAYER, B2: PLAYER }, devTools });
+      const devTools = listing(APP_CONTEXT, { id: 'A1', url: MAIN_URL }, { id: 'B2', url: MAIN_URL });
+      const client = mockClient({ pages: { A1: MAIN_URL, B2: MAIN_URL }, devTools });
       (client.getWindowHandles as Mock).mockResolvedValueOnce(['A1']);
       vi.useFakeTimers();
       const attached = webView(client).attach({ page: REBUILT });
@@ -190,7 +190,7 @@ describe('webView.attach', () => {
     });
 
     test('times out naming the page once it is no longer listed', async () => {
-      const client = mockClient({ devTools: listing(APP_CONTEXT, { id: 'A1', url: PLAYER }) });
+      const client = mockClient({ devTools: listing(APP_CONTEXT, { id: 'A1', url: MAIN_URL }) });
       vi.useFakeTimers();
       const attached = webView(client)
         .attach({ page: REBUILT, timeout: 3_000 })
@@ -203,7 +203,7 @@ describe('webView.attach', () => {
 
     test('iOS: the context is the page, so no window is picked', async () => {
       const client = mockClient({ isAndroid: false, contexts: ['NATIVE_APP', 'WEBVIEW_61028.2'] });
-      const page = { context: 'WEBVIEW_61028.2', key: 'WEBVIEW_61028.2', url: PLAYER, title: '' };
+      const page = { context: 'WEBVIEW_61028.2', key: 'WEBVIEW_61028.2', url: MAIN_URL, title: '' };
       expect(await webView(client).attach({ page })).toBe('WEBVIEW_61028.2');
       expect(switches(client)).toEqual(['NATIVE_APP', 'WEBVIEW_61028.2']);
       expect(client.getWindowHandles).not.toHaveBeenCalled();
@@ -215,7 +215,7 @@ describe('webView.attach', () => {
 
     test('is not combined with context or pageUrl', async () => {
       const client = mockClient();
-      await expect(webView(client).attach({ page: REBUILT, pageUrl: '/player' })).rejects.toThrow(
+      await expect(webView(client).attach({ page: REBUILT, pageUrl: '/main' })).rejects.toThrow(
         'attach: pass `page`, or `context` and `pageUrl`, not both.',
       );
       expect(client.switchAppiumContext).not.toHaveBeenCalled();
@@ -233,14 +233,14 @@ describe('webView.attach', () => {
       page: () => states[Math.min(Math.floor(tick++ / 2), states.length - 1)]!,
     });
     vi.useFakeTimers();
-    const attached = webView(client).attach({ probeSelector: '[data-testid="login-badgeid"]' });
+    const attached = webView(client).attach({ probeSelector: '[data-testid="login-field"]' });
     await vi.runAllTimersAsync();
     expect(await attached).toBe(`WEBVIEW_${APP}`);
     const probes = (client.executeScript as Mock).mock.calls.filter(([s]) =>
       s.includes('querySelector'),
     );
     expect(probes.at(-1)![0]).toBe(
-      'return document.querySelector("[data-testid=\\"login-badgeid\\"]") != null;',
+      'return document.querySelector("[data-testid=\\"login-field\\"]") != null;',
     );
   });
 
@@ -292,7 +292,7 @@ describe('WebView discovery', () => {
       contexts: [
         { id: 'NATIVE_APP' },
         { id: 'WEBVIEW_com.other.app', title: 'Other' },
-        { id: `WEBVIEW_${APP}`, title: 'Player' },
+        { id: `WEBVIEW_${APP}`, title: 'App' },
       ],
     });
     const log = vi.spyOn(console, 'log');

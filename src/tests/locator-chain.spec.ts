@@ -98,11 +98,11 @@ describe('chaining WebView locators', () => {
   test('a script query receives the parent element as its root', async () => {
     const client = mockClient();
     await webView(client)
-      .getByTestId('player-menu')
+      .getByTestId('main-menu')
       .getByRole('button', { name: 'Settings' })
       .tap();
 
-    expect(client.findElements).toHaveBeenCalledWith('css selector', '[data-testid="player-menu"]');
+    expect(client.findElements).toHaveBeenCalledWith('css selector', '[data-testid="main-menu"]');
     const [script, args] = (client.executeScript as Mock).mock.calls[0]!;
     expect(script).toContain('"role":"button"');
     expect(args).toEqual([el('parent')]);
@@ -112,10 +112,10 @@ describe('chaining WebView locators', () => {
   test('chains read as the calls that built them in errors', async () => {
     const client = mockClient({ executeScript: vi.fn().mockResolvedValue([]) });
     const settings = webView(client)
-      .getByTestId('player-menu')
+      .getByTestId('main-menu')
       .getByRole('button', { name: 'Settings' });
     await expect(settings.tap({ timeout: 10 })).rejects.toThrow(
-      'Failed to tap: Element [data-testid="player-menu"] >> getByRole("button", { name: "Settings" }) not visible',
+      'Failed to tap: Element [data-testid="main-menu"] >> getByRole("button", { name: "Settings" }) not visible',
     );
   });
 

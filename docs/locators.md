@@ -238,12 +238,12 @@ await expect(webView.getByRole('heading', { name: 'Device Settings', level: 2 })
 `getByText`, `getByRole`, `getByLabel` and `getByTestId` can also be called on a locator, to look inside its element. Use them to scope a match to one part of the page instead of writing an XPath:
 
 ```ts
-const menu = webView.getByTestId('player-menu');
+const menu = webView.getByTestId('main-menu');
 await menu.getByRole('button', { name: 'Settings' }).tap();
 await expect(webView.getByRole('menu').getByText('Device', { exact: true })).toBeVisible();
 ```
 
-The child is looked up inside the element its parent resolves to (the one `tap()` would act on) and, when that has no match, inside the parent's other matches. Errors name the whole chain, such as `[data-testid="player-menu"] >> getByRole("button", { name: "Settings" })`.
+The child is looked up inside the element its parent resolves to (the one `tap()` would act on) and, when that has no match, inside the parent's other matches. Errors name the whole chain, such as `[data-testid="main-menu"] >> getByRole("button", { name: "Settings" })`.
 
 Native locators chain too, with `device` semantics: `getByText` and `getByLabel` as on `device`, and `getByTestId` matching the accessibility identifier `device.getById` reads. `getByRole` throws there, since native views have no ARIA roles.
 
@@ -313,8 +313,8 @@ const color = await webView.evaluate(() => {
 `webView` binds a WEBVIEW context the first time it is used and then only checks that _some_ WEBVIEW context is current, which stays true after the page behind it is gone: the app reloaded or rebuilt its WebView, relaunched, or handed off to a browser. Call `webView.attach()` at those points to bind a live page again. It hops to `NATIVE_APP` and back on every attempt (Appium skips its own dead-page check when asked for the context it is already in) and retries until the page's `document.readyState` is `interactive` or `complete` and `probeSelector`, if given, is in its DOM. It returns the context it bound.
 
 ```ts
-// The player reloaded behind a login: wait for the new page's badge field.
-await webView.attach({ probeSelector: '[data-testid="login-badgeid"]' });
+// The app reloaded behind a login: wait for the new page's login field.
+await webView.attach({ probeSelector: '[data-testid="login-field"]' });
 
 // A Chrome Custom Tab is in front: drive the sign-in page in it.
 await webView.attach({ context: 'WEBVIEW_chrome', pageUrl: '/oauth2/authorize' });

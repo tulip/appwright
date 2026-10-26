@@ -26,7 +26,7 @@ function mockClient(isAndroid: boolean, overrides: Record<string, unknown> = {})
 }
 
 function device(client: WebDriverClient, buildPath?: string): Device {
-  return new Device(client, 'co.tulip.player', { expectTimeout: 1_000 }, 'emulator', buildPath);
+  return new Device(client, 'com.example.app', { expectTimeout: 1_000 }, 'emulator', buildPath);
 }
 
 describe('getAppState', () => {
@@ -34,7 +34,7 @@ describe('getAppState', () => {
     const android = mockClient(true);
     expect(await device(android).getAppState()).toBe(AppState.Foreground);
     expect(android.executeScript).toHaveBeenCalledWith('mobile: queryAppState', [
-      { appId: 'co.tulip.player' },
+      { appId: 'com.example.app' },
     ]);
 
     const ios = mockClient(false, { executeScript: vi.fn().mockResolvedValue(1) });
@@ -46,7 +46,7 @@ describe('getAppState', () => {
 
   test('asks from NATIVE_APP', async () => {
     const client = mockClient(true, {
-      getAppiumContext: vi.fn().mockResolvedValue('WEBVIEW_co.tulip.player'),
+      getAppiumContext: vi.fn().mockResolvedValue('WEBVIEW_com.example.app'),
     });
     await device(client).getAppState();
     expect(client.switchAppiumContext).toHaveBeenCalledWith('NATIVE_APP');
@@ -55,11 +55,11 @@ describe('getAppState', () => {
 
 describe('getBuildInfo', () => {
   test("reads the project's build, or the one given", async () => {
-    const info = { bundleId: 'co.tulip.player', version: '2.8.0', buildNumber: '2', path: '/b' };
+    const info = { bundleId: 'com.example.app', version: '2.8.0', buildNumber: '2', path: '/b' };
     readBuildInfo.mockResolvedValue(info);
-    const d = device(mockClient(false), 'builds/TulipPlayer.app');
+    const d = device(mockClient(false), 'builds/MyApp.app');
     expect(await d.getBuildInfo()).toEqual(info);
-    expect(readBuildInfo).toHaveBeenLastCalledWith('builds/TulipPlayer.app');
+    expect(readBuildInfo).toHaveBeenLastCalledWith('builds/MyApp.app');
     await d.getBuildInfo('builds/Other.ipa');
     expect(readBuildInfo).toHaveBeenLastCalledWith('builds/Other.ipa');
   });

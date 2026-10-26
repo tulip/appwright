@@ -2,7 +2,7 @@
 '@tulip/appwright': minor
 ---
 
-Closes the gaps the player e2e suite was working around by casting `Device` to its private
+Closes the gaps a downstream e2e suite was working around by casting `Device` to its private
 WebDriver client or by guessing from the host.
 
 **WebView.** `webView.attach({ context, pageUrl, probeSelector, timeout, settle })` binds the

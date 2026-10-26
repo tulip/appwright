@@ -7,7 +7,7 @@ import { DeviceOrientation } from '../types';
 
 type MockClient = WebDriverClient & Record<string, Mock>;
 
-const APP = 'co.tulip.player';
+const APP = 'com.example.app';
 const PORTRAIT = { x: 0, y: 0, width: 402, height: 874 };
 const LANDSCAPE = { x: 0, y: 0, width: 874, height: 402 };
 
@@ -91,7 +91,7 @@ describe('setOrientation', () => {
 
   test('switches to NATIVE_APP first', async () => {
     const client = mockClient(true, {
-      getAppiumContext: vi.fn().mockResolvedValue('WEBVIEW_co.tulip.player'),
+      getAppiumContext: vi.fn().mockResolvedValue('WEBVIEW_com.example.app'),
     });
     await device(client).getOrientation();
     expect(client.switchAppiumContext).toHaveBeenCalledWith('NATIVE_APP');

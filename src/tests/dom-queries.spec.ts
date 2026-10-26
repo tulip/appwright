@@ -153,12 +153,12 @@ describe('getByRole in a WebView', () => {
       <input id="url" aria-labelledby="lbl">
       <label for="name">Device name</label><input id="name">
       <label>Remember me <input id="remember" type="checkbox"></label>
-      <a id="logo" href="/"><img alt="Tulip"></a>
+      <a id="logo" href="/"><img alt="Example"></a>
       <button id="t" title="Close"></button>`);
     expect(ids(byRole('textbox', { name: 'Account URL' }))).toEqual(['url']);
     expect(ids(byRole('textbox', { name: 'Device name' }))).toEqual(['name']);
     expect(ids(byRole('checkbox', { name: 'Remember me' }))).toEqual(['remember']);
-    expect(ids(byRole('link', { name: 'Tulip' }))).toEqual(['logo']);
+    expect(ids(byRole('link', { name: 'Example' }))).toEqual(['logo']);
     expect(ids(byRole('button', { name: 'Close' }))).toEqual(['t']);
   });
 
@@ -169,7 +169,7 @@ describe('getByRole in a WebView', () => {
 
   test('searches below a root element only', () => {
     render(`
-      <div data-testid="player-menu" id="pm"><button id="in" aria-label="Settings"></button></div>
+      <div data-testid="main-menu" id="pm"><button id="in" aria-label="Settings"></button></div>
       <button id="out" aria-label="Settings"></button>`);
     expect(ids(byRole('button', { name: 'Settings' }, document.getElementById('pm')))).toEqual([
       'in',

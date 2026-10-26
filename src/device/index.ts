@@ -631,7 +631,7 @@ export class Device {
    * **Usage:**
    * ```js
    * await device.withAlertAutoAccept(false, async () => {
-   *   await device.getById("clear-instance-button").tap();
+   *   await device.getById("clear-button").tap();
    *   expect(await device.getAlertText()).toContain("Are you sure?");
    *   await device.acceptAlert({ buttonLabel: "Clear Data" });
    * });

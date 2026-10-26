@@ -32,7 +32,7 @@ function mockClient(isAndroid: boolean, overrides: Record<string, unknown> = {})
 }
 
 function device(client: WebDriverClient): Device {
-  return new Device(client, 'co.tulip.player', { expectTimeout: 1_000 }, 'emulator');
+  return new Device(client, 'com.example.app', { expectTimeout: 1_000 }, 'emulator');
 }
 
 /** The [x, y] of the press and of the lift in the one pointer sequence sent. */
@@ -66,7 +66,7 @@ describe('drag', () => {
 
   test('switches to NATIVE_APP first', async () => {
     const client = mockClient(true, {
-      getAppiumContext: vi.fn().mockResolvedValue('WEBVIEW_co.tulip.player'),
+      getAppiumContext: vi.fn().mockResolvedValue('WEBVIEW_com.example.app'),
     });
     await device(client).drag({ from: { x: 1, y: 1 }, to: { x: 2, y: 2 } });
     expect(client.switchAppiumContext).toHaveBeenCalledWith('NATIVE_APP');
@@ -103,7 +103,7 @@ describe('swipeFromEdge', () => {
 describe('pressBack', () => {
   test('Android: the back key, from NATIVE_APP', async () => {
     const client = mockClient(true, {
-      getAppiumContext: vi.fn().mockResolvedValue('WEBVIEW_co.tulip.player'),
+      getAppiumContext: vi.fn().mockResolvedValue('WEBVIEW_com.example.app'),
     });
     await device(client).pressBack();
     expect(client.switchAppiumContext).toHaveBeenCalledWith('NATIVE_APP');

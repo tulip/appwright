@@ -10,7 +10,7 @@ type MockClient = WebDriverClient & Record<string, Mock>;
 /** XCUITest: one context per page. */
 const IOS_CONTEXTS = [
   { id: 'NATIVE_APP' },
-  { id: 'WEBVIEW_61028.1', title: 'Tulip', url: 'https://acme.tulip.co/player', bundleId: 'x' },
+  { id: 'WEBVIEW_61028.1', title: 'Example', url: 'https://app.example.com/main', bundleId: 'x' },
 ];
 
 /** UiAutomator2: one entry per WebView, its DevTools targets nested. */
@@ -19,7 +19,7 @@ function androidContexts(...pages: { id: string; url: string; type?: string }[])
     {
       proc: '@webview_devtools_remote_123',
       webview: 'WEBVIEW_123',
-      webviewName: 'WEBVIEW_co.tulip.player',
+      webviewName: 'WEBVIEW_com.example.app',
       pages: pages.map((page) => ({ title: '', type: 'page', ...page })),
     },
     { proc: '@other', webview: 'WEBVIEW_456', webviewName: null, pages: [] },
@@ -45,7 +45,7 @@ function mockClient(isAndroid: boolean, ...answers: unknown[]): MockClient {
 }
 
 function device(client: WebDriverClient): Device {
-  return new Device(client, 'co.tulip.player', { expectTimeout: 1_000 }, 'emulator');
+  return new Device(client, 'com.example.app', { expectTimeout: 1_000 }, 'emulator');
 }
 
 describe('toWebPages', () => {
@@ -54,22 +54,22 @@ describe('toWebPages', () => {
       {
         context: 'WEBVIEW_61028.1',
         key: 'WEBVIEW_61028.1',
-        url: 'https://acme.tulip.co/player',
-        title: 'Tulip',
+        url: 'https://app.example.com/main',
+        title: 'Example',
       },
     ]);
   });
 
   test('Android: pages flattened under their context, other targets left out', () => {
     const raw = androidContexts(
-      { id: 'A1', url: 'https://acme.tulip.co/player' },
-      { id: 'SW', url: 'https://acme.tulip.co/sw.js', type: 'service_worker' },
+      { id: 'A1', url: 'https://app.example.com/main' },
+      { id: 'SW', url: 'https://app.example.com/sw.js', type: 'service_worker' },
     );
     expect(toWebPages(true, raw)).toEqual([
       {
-        context: 'WEBVIEW_co.tulip.player',
-        key: 'WEBVIEW_co.tulip.player#A1',
-        url: 'https://acme.tulip.co/player',
+        context: 'WEBVIEW_com.example.app',
+        key: 'WEBVIEW_com.example.app#A1',
+        url: 'https://app.example.com/main',
         title: '',
       },
     ]);
@@ -93,20 +93,20 @@ describe('webPages / waitForWebPage', () => {
   });
 
   test('waits past about:blank for the new page', async () => {
-    const player = { id: 'A1', url: 'https://acme.tulip.co/player' };
+    const main = { id: 'A1', url: 'https://app.example.com/main' };
     const client = mockClient(
       true,
-      androidContexts(player),
-      androidContexts(player, { id: 'B2', url: 'about:blank' }),
-      androidContexts(player, { id: 'B2', url: 'https://cdn.example.com/manual.pdf' }),
+      androidContexts(main),
+      androidContexts(main, { id: 'B2', url: 'about:blank' }),
+      androidContexts(main, { id: 'B2', url: 'https://cdn.example.com/manual.pdf' }),
     );
     const d = device(client);
     const before = await d.webPages();
 
     const popup = await d.waitForWebPage({ notIn: before, url: /\.pdf$/, pollInterval: 1 });
     expect(popup).toEqual({
-      context: 'WEBVIEW_co.tulip.player',
-      key: 'WEBVIEW_co.tulip.player#B2',
+      context: 'WEBVIEW_com.example.app',
+      key: 'WEBVIEW_com.example.app#B2',
       url: 'https://cdn.example.com/manual.pdf',
       title: '',
     });
@@ -115,13 +115,13 @@ describe('webPages / waitForWebPage', () => {
   });
 
   test('Android: a rebuilt WebView at a URL among notIn is new, by its key', async () => {
-    const player = { id: 'A1', url: 'https://acme.tulip.co/player' };
-    const client = mockClient(true, androidContexts(player, { id: 'B2', url: player.url }));
+    const main = { id: 'A1', url: 'https://app.example.com/main' };
+    const client = mockClient(true, androidContexts(main, { id: 'B2', url: main.url }));
     const rebuilt = await device(client).waitForWebPage({
-      notIn: toWebPages(true, androidContexts(player)),
+      notIn: toWebPages(true, androidContexts(main)),
       timeout: 0,
     });
-    expect(rebuilt.key).toBe('WEBVIEW_co.tulip.player#B2');
+    expect(rebuilt.key).toBe('WEBVIEW_com.example.app#B2');
   });
 
   test('iOS: a second tab at a known URL is new, by its key', async () => {
@@ -135,7 +135,7 @@ describe('webPages / waitForWebPage', () => {
   });
 
   test('a known page that navigated is not new', async () => {
-    const navigated = [IOS_CONTEXTS[0], { ...IOS_CONTEXTS[1], url: 'https://acme.tulip.co/home' }];
+    const navigated = [IOS_CONTEXTS[0], { ...IOS_CONTEXTS[1], url: 'https://app.example.com/home' }];
     const client = mockClient(false, navigated);
     await expect(
       device(client).waitForWebPage({ notIn: toWebPages(false, IOS_CONTEXTS), timeout: 0 }),
