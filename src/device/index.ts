@@ -408,8 +408,9 @@ export class Device {
    * The bundle id (iOS) or package name (Android) of the app under test, read off the build.
    * Unlike `getCurrentBundleId()`, this does not change when another app comes to the front.
    *
-   * Throws when the provider could not determine it: the emulator and local-device providers
-   * read a real one off the build, BrowserStack reports the uploaded app's name instead.
+   * The emulator and local-device providers read it off the build and LambdaTest takes it from
+   * the config. BrowserStack reports the uploaded app's name instead, which no driver command
+   * accepts as an app id. Throws when the provider reported none at all.
    */
   getAppBundleId(): string {
     if (!this.bundleId) {
@@ -420,6 +421,25 @@ export class Device {
       );
     }
     return this.bundleId;
+  }
+
+  /**
+   * Whether `bundleId` is an id the driver accepts. On BrowserStack it is the uploaded app's
+   * name (see `getAppBundleId()`).
+   */
+  private knowsAppUnderTestId(): boolean {
+    return this.provider !== 'browserstack' && !!this.bundleId;
+  }
+
+  /** The app under test's id for `method`'s default, or why there is none to default to. */
+  private appUnderTestId(method: string): string {
+    if (this.provider === 'browserstack') {
+      throw new Error(
+        `${method}() needs the app id on BrowserStack, which reports the uploaded app's name ` +
+          `rather than its bundle id or package: pass it, as in ${method}('com.example.app').`,
+      );
+    }
+    return this.getAppBundleId();
   }
 
   /**
@@ -466,7 +486,8 @@ export class Device {
    * await device.activateApp();
    * ```
    */
-  async getAppState(appId: string = this.getAppBundleId()): Promise<AppState> {
+  async getAppState(appId?: string): Promise<AppState> {
+    appId ??= this.appUnderTestId('getAppState');
     await this.ensureNativeContext();
     return await this.executeMobileCommand<AppState>('mobile: queryAppState', this.appIdArg(appId));
   }
@@ -1297,7 +1318,8 @@ export class Device {
       return;
     }
     try {
-      if (this.bundleId && (await this.getCurrentBundleId()) !== this.bundleId) {
+      // On BrowserStack there is no id to activate by (see `getAppBundleId()`): rotate only.
+      if (this.knowsAppUnderTestId() && (await this.getCurrentBundleId()) !== this.bundleId) {
         await this.activateApp();
       }
       await this.setOrientation(orientation);

@@ -51,6 +51,13 @@ describe('getAppState', () => {
     await device(client).getAppState();
     expect(client.switchAppiumContext).toHaveBeenCalledWith('NATIVE_APP');
   });
+  test('BrowserStack: asks for the app id instead of passing the uploaded name', async () => {
+    const client = mockClient(true);
+    const d = new Device(client, 'MyApp.apk', { expectTimeout: 1_000 }, 'browserstack');
+    await expect(d.getAppState()).rejects.toThrow("pass it, as in getAppState('com.example.app')");
+    expect(client.executeScript).not.toHaveBeenCalled();
+    expect(await d.getAppState('com.example.app')).toBe(AppState.Foreground);
+  });
 });
 
 describe('getBuildInfo', () => {

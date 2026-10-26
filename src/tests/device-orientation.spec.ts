@@ -30,8 +30,8 @@ function mockClient(isAndroid: boolean, overrides: Record<string, unknown> = {})
   } as MockClient;
 }
 
-function device(client: WebDriverClient): Device {
-  return new Device(client, APP, { expectTimeout: 1_000 }, 'emulator');
+function device(client: WebDriverClient, provider = 'emulator'): Device {
+  return new Device(client, APP, { expectTimeout: 1_000 }, provider);
 }
 
 afterEach(() => {
@@ -167,6 +167,19 @@ describe('restoreOrientation (after each test)', () => {
     expect(warn).toHaveBeenCalledWith(
       'Could not rotate the device back to portrait after the test: invalid session id',
     );
+  });
+
+  test("BrowserStack: rotates back without activating by the uploaded app's name", async () => {
+    const client = mockClient(false, {
+      executeScript: vi.fn().mockResolvedValue({ bundleId: 'com.apple.springboard' }),
+    });
+    const d = device(client, 'browserstack');
+    await d.setOrientation(DeviceOrientation.LANDSCAPE);
+    (client.getOrientation as Mock).mockResolvedValue('PORTRAIT');
+    (client.getWindowRect as Mock).mockResolvedValue(PORTRAIT);
+    await d.restoreOrientation(DeviceOrientation.PORTRAIT);
+    expect(client.executeScript).not.toHaveBeenCalledWith('mobile: activateApp', expect.anything());
+    expect(client.setOrientation).toHaveBeenLastCalledWith('PORTRAIT');
   });
 
   test('leaves an app already in front alone', async () => {

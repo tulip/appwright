@@ -24,6 +24,8 @@ names, container paths, what a real device allows) are handled inside.
   await device.activateApp();
   ```
 
+  On BrowserStack pass `appId`: the provider reports the uploaded app's name, not its id.
+
 - `device.getBuildInfo(buildPath?)` — what the project's build file declares: `bundleId`,
   `version` (`CFBundleShortVersionString` / `versionName`), `buildNumber` (`CFBundleVersion` /
   `versionCode`) and `path`, read on the host from the `.app`, `.ipa` or `.apk` (an `.apk` needs
@@ -253,7 +255,8 @@ const window = await device.setOrientation(DeviceOrientation.LANDSCAPE);
 
 A rotation outlives the session, so after a test that rotated, the `device` fixture rotates the
 device back to the project's `device.orientation` (portrait by default), bringing the app under
-test to the front first. On iOS the app has to be in front to rotate at all — the home screen is
+test to the front first (except on BrowserStack, which reports the uploaded app's name rather
+than an id to activate it by). On iOS the app has to be in front to rotate at all — the home screen is
 portrait-only — and a modal that is still animating in refuses too: WebDriverAgent answers
 "Unable To Rotate Device", and `setOrientation` reports that rather than retrying it.
 
