@@ -45,6 +45,11 @@ export function nativeTextQuery(
   { exact = false }: TextOptions = {},
 ): LocatorQuery {
   if (text instanceof RegExp) {
+    // Each element's text is tested in turn, across polls: a `g`/`y` RegExp would resume from
+    // where its previous test() matched and skip every other match.
+    if (text.global || text.sticky) {
+      text = new RegExp(text.source, text.flags.replace(/[gy]/g, ''));
+    }
     const substringForContains = longestDeterministicGroup(text);
     if (!substringForContains) {
       return { selector: '//*', findStrategy: 'xpath', textToMatch: text };

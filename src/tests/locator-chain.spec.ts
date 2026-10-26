@@ -102,6 +102,19 @@ describe('chaining native locators', () => {
     expect(await item.getElement()).toEqual(el('b1'));
   });
 
+  test('a global RegExp gives the same answer on every lookup', async () => {
+    const client = mockClient({
+      findElements: vi.fn().mockResolvedValue([el('a'), el('b')]),
+      getElementText: vi.fn().mockResolvedValue('Total 5'),
+    });
+    const total = device(client).getByText(/(Total) \d/g);
+    const found = [];
+    for (let i = 0; i < 4; i++) {
+      found.push(await total.getElement());
+    }
+    expect(found).toEqual([el('b'), el('b'), el('b'), el('b')]);
+  });
+
   test('no parent match means no child match, without looking further', async () => {
     const client = mockClient({ findElements: vi.fn().mockResolvedValue([]) });
     await device(client).getById('dialog').getByText('OK').waitFor('hidden');
