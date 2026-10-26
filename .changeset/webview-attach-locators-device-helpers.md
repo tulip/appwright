@@ -71,3 +71,7 @@ different `@playwright/test` and ran its CLI through `npx` now runs appwright's.
   until the app came back to the front, then bound the app's WebView. A test that hands off to a
   browser and expects the app's page should call `webView.attach()` once the browser has closed,
   which binds the app in front again.
+- The exported `AppwrightLocator` interface has new required members: `boundingBox()`,
+  `getByText()`, `getByRole()`, `getByLabel()` and `getByTestId()`. Code that only calls locators
+  is unaffected; a class that `implements AppwrightLocator`, or a typed test double, has to add
+  them.
