@@ -65,6 +65,16 @@ describe('chaining native locators', () => {
     ]);
   });
 
+  test("a RegExp is checked even against a parent's only descendant", async () => {
+    const client = mockClient({ getElementText: vi.fn().mockResolvedValue('New') });
+    const count = device(client).getById('badge').getByText(/\d+/);
+    expect(await count.getElement()).toBeNull();
+    expect(client.getElementText).toHaveBeenCalledWith('child');
+
+    (client.getElementText as Mock).mockResolvedValue('12');
+    expect(await count.getElement()).toEqual(el('child'));
+  });
+
   test('no parent match means no child match, without looking further', async () => {
     const client = mockClient({ findElements: vi.fn().mockResolvedValue([]) });
     await device(client).getById('dialog').getByText('OK').waitFor('hidden');

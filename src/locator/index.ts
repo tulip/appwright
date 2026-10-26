@@ -452,7 +452,10 @@ export class Locator {
   /** Every element this locator matches, the one `getElement()` returns first. */
   private async *matches(): AsyncGenerator<ElementReference> {
     const elements = await this.findAll();
-    if (elements.length === 1) {
+    // A lone match needs no text check when the selector already matched the text. A RegExp
+    // only narrows the selector to its longest literal part, or to `//*` with none, so a lone
+    // match still has to pass the RegExp: a chained `.//*` under a one-child parent is one.
+    if (elements.length === 1 && !(this.textToMatch instanceof RegExp)) {
       yield elements[0]!;
       return;
     }
