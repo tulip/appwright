@@ -20,6 +20,9 @@ Your suite can have a combination of both fixtures:
   - Each `Device` maps to a WebDriver session internally.
 - `device` is created and teared down for every test
 - `persistentDevice` is created and teared down for every worker
+  - So is what a test changes on it: a test that calls `setOrientation()` leaves the device
+    rotated for the next test in the worker. It is rotated back to the project's
+    `device.orientation` only when the worker ends.
 
 ## Usage
 

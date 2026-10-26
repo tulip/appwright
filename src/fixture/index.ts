@@ -108,6 +108,11 @@ export const test = base.extend<TestLevelFixtures, WorkerLevelFixtures>({
       );
       await use(device);
       await workerInfoStore.saveWorkerEndTime(workerIndex, new Date());
+      // Only at the end of the worker: tests sharing this device see each other's rotations.
+      await device.restoreOrientation(
+        (project as FullProject<AppwrightConfig>).use.device?.orientation ??
+          DeviceOrientation.PORTRAIT,
+      );
       await device.close();
     },
     { scope: 'worker' },

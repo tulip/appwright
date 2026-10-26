@@ -182,6 +182,44 @@ describe('restoreOrientation (after each test)', () => {
     expect(client.setOrientation).toHaveBeenLastCalledWith('PORTRAIT');
   });
 
+  test('Android rotates whatever is in front, without activating the app', async () => {
+    const client = mockClient(true, {
+      executeScript: vi.fn().mockImplementation(async (command: string) =>
+        command === 'mobile: getCurrentPackage' ? 'com.android.chrome' : undefined,
+      ),
+    });
+    const d = device(client);
+    await d.setOrientation(DeviceOrientation.LANDSCAPE);
+    (client.getOrientation as Mock).mockResolvedValue('PORTRAIT');
+    (client.getWindowRect as Mock).mockResolvedValue(PORTRAIT);
+    await d.restoreOrientation(DeviceOrientation.PORTRAIT);
+    expect(client.executeScript).not.toHaveBeenCalledWith('mobile: activateApp', expect.anything());
+    expect(client.setOrientation).toHaveBeenLastCalledWith('PORTRAIT');
+  });
+
+  test("retries WebDriverAgent's refusal while the app animates in", async () => {
+    const client = mockClient(false);
+    const d = device(client);
+    await d.setOrientation(DeviceOrientation.LANDSCAPE);
+    (client.setOrientation as Mock)
+      .mockRejectedValueOnce(new Error('Unable To Rotate Device'))
+      .mockResolvedValue(undefined);
+    (client.getOrientation as Mock).mockResolvedValue('PORTRAIT');
+    (client.getWindowRect as Mock).mockResolvedValue(PORTRAIT);
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    vi.useFakeTimers();
+    const restored = d.restoreOrientation(DeviceOrientation.PORTRAIT);
+    await vi.runAllTimersAsync();
+    await restored;
+
+    expect((client.setOrientation as Mock).mock.calls).toEqual([
+      ['LANDSCAPE'],
+      ['PORTRAIT'],
+      ['PORTRAIT'],
+    ]);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   test('leaves an app already in front alone', async () => {
     const client = mockClient(false);
     const d = device(client);

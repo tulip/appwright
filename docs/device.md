@@ -254,11 +254,13 @@ const window = await device.setOrientation(DeviceOrientation.LANDSCAPE);
   device is held.
 
 A rotation outlives the session, so after a test that rotated, the `device` fixture rotates the
-device back to the project's `device.orientation` (portrait by default), bringing the app under
+device back to the project's `device.orientation` (portrait by default). On iOS the app has to be
+in front to rotate at all — the home screen is portrait-only — so the fixture brings the app under
 test to the front first (except on BrowserStack, which reports the uploaded app's name rather
-than an id to activate it by). On iOS the app has to be in front to rotate at all — the home screen is
-portrait-only — and a modal that is still animating in refuses too: WebDriverAgent answers
-"Unable To Rotate Device", and `setOrientation` reports that rather than retrying it.
+than an id to activate it by). A modal that is still animating in refuses too: WebDriverAgent
+answers "Unable To Rotate Device", and `setOrientation` reports that rather than retrying it. The
+fixture's rotate-back does retry it, twice, a second apart. `persistentDevice` rotates back only
+when its worker ends, so tests sharing it see each other's rotations.
 
 ## Gestures
 

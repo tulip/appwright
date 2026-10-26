@@ -67,6 +67,8 @@ const ANDROID_BASELINE_DPI = 160;
 
 const ORIENTATION_TIMEOUT_MS = 10_000;
 const ORIENTATION_POLL_MS = 250;
+const RESTORE_ORIENTATION_ATTEMPTS = 3;
+const RESTORE_ORIENTATION_RETRY_MS = 1_000;
 
 /**
  * WebDriverAgent's refusal to rotate: the home screen (SpringBoard) is portrait-only, and a modal
@@ -1321,10 +1323,12 @@ export class Device {
   }
 
   /**
-   * Rotates the device back to `orientation` after a test that rotated it, with the app under
-   * test brought to the front first, as iOS requires. Failures are logged, not thrown: the
-   * test's own result stands.
-   * @internal Called by the `device` fixture.
+   * Rotates the device back to `orientation` after a test that rotated it. On iOS the app under
+   * test is brought to the front first, since the home screen is portrait-only; Android rotates
+   * whatever is in front. WebDriverAgent's "Unable To Rotate Device", which an app still
+   * animating in after `activateApp()` can draw, is retried here: unlike in a test, a retry hides
+   * nothing. Failures are logged, not thrown: the test's own result stands.
+   * @internal Called by the `device` and `persistentDevice` fixtures.
    */
   async restoreOrientation(orientation: DeviceOrientation): Promise<void> {
     if (!this.rotated) {
@@ -1332,10 +1336,27 @@ export class Device {
     }
     try {
       // On BrowserStack there is no id to activate by (see `getAppBundleId()`): rotate only.
-      if (this.knowsAppUnderTestId() && (await this.getCurrentBundleId()) !== this.bundleId) {
+      if (
+        this.getPlatform() == Platform.IOS &&
+        this.knowsAppUnderTestId() &&
+        (await this.getCurrentBundleId()) !== this.bundleId
+      ) {
         await this.activateApp();
       }
-      await this.setOrientation(orientation);
+      for (let attempt = 1; ; attempt++) {
+        try {
+          await this.setOrientation(orientation);
+          break;
+        } catch (error) {
+          if (
+            attempt >= RESTORE_ORIENTATION_ATTEMPTS ||
+            !errorMessage(error).includes(IOS_CANNOT_ROTATE)
+          ) {
+            throw error;
+          }
+          await delay(RESTORE_ORIENTATION_RETRY_MS);
+        }
+      }
     } catch (error) {
       logger.warn(
         `Could not rotate the device back to ${orientation} after the test: ${errorMessage(error)}`,
