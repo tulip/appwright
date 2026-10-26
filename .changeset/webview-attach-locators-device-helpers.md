@@ -61,3 +61,8 @@ appwright's own dependencies rather than `npx`, so their bins need not be hoiste
 - `editable: true` (`getByLabel()`, `getById()`) also matches Android's autocomplete fields, which
   report `AutoCompleteTextView` rather than `EditText` — a `SearchView`'s field is one. A label
   shared by such a field and an `EditText` now matches both, and the last one wins.
+- With Chrome or a Chrome Custom Tab in front on Android, `webView` calls now bind Chrome's
+  `WEBVIEW_chrome` page. Before, discovery found no context and retried for about half a minute
+  until the app came back to the front, then bound the app's WebView. A test that hands off to a
+  browser and expects the app's page should call `webView.attach()` once the browser has closed,
+  which binds the app in front again.
