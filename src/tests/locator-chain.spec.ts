@@ -75,6 +75,16 @@ describe('chaining native locators', () => {
     expect(await count.getElement()).toEqual(el('child'));
   });
 
+  test('iOS chains use the predicate the top-level call would', async () => {
+    const client = mockClient({ isAndroid: false });
+    await device(client).getById('print-dialog').getByText('Save').tap();
+    expect(client.findElementsFromElement).toHaveBeenCalledWith(
+      'parent',
+      '-ios predicate string',
+      'label CONTAINS "Save"',
+    );
+  });
+
   test('no parent match means no child match, without looking further', async () => {
     const client = mockClient({ findElements: vi.fn().mockResolvedValue([]) });
     await device(client).getById('dialog').getByText('OK').waitFor('hidden');

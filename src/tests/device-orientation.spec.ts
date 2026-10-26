@@ -3,6 +3,7 @@ import { afterEach, describe, expect, Mock, test, vi } from 'vitest';
 import { Client as WebDriverClient } from 'webdriver';
 
 import { Device } from '../device';
+import { logger } from '../logger';
 import { DeviceOrientation } from '../types';
 
 type MockClient = WebDriverClient & Record<string, Mock>;
@@ -35,6 +36,7 @@ function device(client: WebDriverClient): Device {
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 describe('setOrientation', () => {
@@ -89,12 +91,15 @@ describe('setOrientation', () => {
     );
   });
 
-  test('switches to NATIVE_APP first', async () => {
+  test('switches to NATIVE_APP before rotating', async () => {
     const client = mockClient(true, {
       getAppiumContext: vi.fn().mockResolvedValue('WEBVIEW_com.example.app'),
     });
-    await device(client).getOrientation();
+    await device(client).setOrientation(DeviceOrientation.LANDSCAPE);
     expect(client.switchAppiumContext).toHaveBeenCalledWith('NATIVE_APP');
+    expect((client.switchAppiumContext as Mock).mock.invocationCallOrder[0]).toBeLessThan(
+      (client.setOrientation as Mock).mock.invocationCallOrder[0]!,
+    );
   });
 });
 
@@ -157,6 +162,21 @@ describe('restoreOrientation (after each test)', () => {
     const d = device(client);
     await d.setOrientation(DeviceOrientation.LANDSCAPE);
     (client.setOrientation as Mock).mockRejectedValue(new Error('invalid session id'));
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
     await expect(d.restoreOrientation(DeviceOrientation.PORTRAIT)).resolves.toBeUndefined();
+    expect(warn).toHaveBeenCalledWith(
+      'Could not rotate the device back to portrait after the test: invalid session id',
+    );
+  });
+
+  test('leaves an app already in front alone', async () => {
+    const client = mockClient(false);
+    const d = device(client);
+    await d.setOrientation(DeviceOrientation.LANDSCAPE);
+    (client.getOrientation as Mock).mockResolvedValue('PORTRAIT');
+    (client.getWindowRect as Mock).mockResolvedValue(PORTRAIT);
+    await d.restoreOrientation(DeviceOrientation.PORTRAIT);
+    expect(client.executeScript).not.toHaveBeenCalledWith('mobile: activateApp', expect.anything());
+    expect(client.setOrientation).toHaveBeenLastCalledWith('PORTRAIT');
   });
 });

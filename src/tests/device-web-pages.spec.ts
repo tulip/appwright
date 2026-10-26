@@ -114,6 +114,22 @@ describe('webPages / waitForWebPage', () => {
     expect(client.executeScript).toHaveBeenCalledTimes(3);
   });
 
+  test('without a url filter, still waits past about:blank', async () => {
+    const main = { id: 'A1', url: 'https://app.example.com/main' };
+    const client = mockClient(
+      true,
+      androidContexts(main),
+      androidContexts(main, { id: 'B2', url: 'about:blank' }),
+      androidContexts(main, { id: 'B2', url: 'https://app.example.com/help' }),
+    );
+    const d = device(client);
+    const before = await d.webPages();
+
+    const popup = await d.waitForWebPage({ notIn: before, pollInterval: 1 });
+    expect(popup.url).toBe('https://app.example.com/help');
+    expect(client.executeScript).toHaveBeenCalledTimes(3);
+  });
+
   test('Android: a rebuilt WebView at a URL among notIn is new, by its key', async () => {
     const main = { id: 'A1', url: 'https://app.example.com/main' };
     const client = mockClient(true, androidContexts(main, { id: 'B2', url: main.url }));

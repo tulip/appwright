@@ -97,6 +97,12 @@ describe('swipeFromEdge', () => {
     const client = mockClient(false);
     await device(client).swipeFromEdge('left', { distance: 2 });
     expect(stroke(client).to[0]).toBe(401);
+
+    const fromRight = mockClient(false, {
+      getWindowRect: vi.fn().mockResolvedValue({ x: 10, y: 0, width: 402, height: 874 }),
+    });
+    await device(fromRight).swipeFromEdge('right', { distance: 2 });
+    expect(stroke(fromRight).to[0]).toBe(10);
   });
 });
 

@@ -3,6 +3,7 @@ import { afterEach, describe, expect, Mock, test, vi } from 'vitest';
 import { Client as WebDriverClient } from 'webdriver';
 
 import { Device } from '../device';
+import { urlMatches } from '../utils';
 import { WebView } from '../webView';
 
 type MockClient = WebDriverClient & Record<string, Mock>;
@@ -307,5 +308,14 @@ describe('WebView discovery', () => {
       `[WebView] Skipping WEBVIEW_com.other.app: not ${APP}'s, the app in front.`,
     );
     log.mockRestore();
+  });
+});
+
+describe('urlMatches', () => {
+  test('a global RegExp matches the same URL on every poll', () => {
+    const pattern = /\/main/g;
+    expect(urlMatches('https://app.example.com/main', pattern)).toBe(true);
+    expect(urlMatches('https://app.example.com/main', pattern)).toBe(true);
+    expect(urlMatches('https://app.example.com/help', pattern)).toBe(false);
   });
 });
