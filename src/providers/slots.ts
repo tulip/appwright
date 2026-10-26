@@ -13,6 +13,27 @@ const ANDROID_SYSTEM_PORT_BASE = 8200;
 const IOS_WDA_LOCAL_PORT_BASE = 8100;
 const IOS_MJPEG_SERVER_PORT_BASE = 9100;
 
+/**
+ * Webdriver client timeout for creating a local session. Matches `appium:wdaLaunchTimeout`:
+ * session creation can build WebDriverAgent, which takes minutes when several runs build at once,
+ * and the client's 120 s default gives up before the server does.
+ */
+export const LOCAL_SESSION_TIMEOUT_MS = 600_000;
+/** Webdriver client timeout for every command after the session exists (the client default). */
+export const LOCAL_COMMAND_TIMEOUT_MS = 120_000;
+
+/** Port slots available on one host; slot `n` maps to the ports in {@link portsForSlot}. */
+export const MAX_PORT_SLOTS = 100;
+
+/** Every host port a port slot can use, on either platform. */
+export function portsForSlot(portSlot: number): number[] {
+  return [
+    ANDROID_SYSTEM_PORT_BASE + portSlot,
+    IOS_WDA_LOCAL_PORT_BASE + portSlot,
+    IOS_MJPEG_SERVER_PORT_BASE + portSlot,
+  ];
+}
+
 const EMULATOR_UDID_PATTERN = /^emulator-(\d+)$/;
 const EMULATOR_MIN_PORT = 5554;
 const EMULATOR_MAX_PORT = 5584;
@@ -26,36 +47,42 @@ type SlotDeviceConfig = Pick<LocalDeviceConfig | EmulatorConfig, 'udid' | 'devic
  * - Android: `appium:systemPort` (uiautomator2 server forward). `chromedriverPort` and
  *   `mjpegServerPort` are deliberately left unset: the driver auto-allocates chromedriver ports
  *   and skips the MJPEG forward when the capability is absent.
- * - iOS: `appium:wdaLocalPort` (WDA forward), `appium:mjpegServerPort` (XCUITest binds it on
- *   every session, so it must be unique once set) and `appium:derivedDataPath` (per-instance
- *   WDA build products, as recommended by the XCUITest parallel-tests guide).
+ * - iOS: `appium:wdaLocalPort` (WDA forward; on real devices the driver forwards it to port 8100 on
+ *   that device), `appium:mjpegServerPort` (XCUITest binds it on every session, so it must be
+ *   unique once set) and `appium:derivedDataPath` (WDA build products, one folder per concurrent
+ *   session as recommended by the XCUITest parallel-tests guide; keyed by port slot rather than
+ *   device so a warm WDA build is reused by whichever device takes the slot next).
  *
- * These ports are derived from the slot and deliberately not probed for availability, unlike the
- * Appium server port: the bases below are the driver defaults, and a run needs only `workers`
- * consecutive ports from each, so the ranges are assumed free on the host. If something else on
- * the machine holds one, session creation fails inside the driver rather than here.
+ * Ports come from the host-wide port slot leased with the device, not from the worker slot or the
+ * device's position in its pool, so two concurrent runs (or two projects of one platform) never
+ * get the same ports. The bases are the driver defaults; slots whose ports another program already
+ * listens on are skipped when the slot is leased.
  */
 export function getSlotCapabilities(
   platform: Platform,
-  slot: number,
+  portSlot: number,
 ): Record<string, string | number> {
-  assertValidSlot(slot);
+  if (!Number.isInteger(portSlot) || portSlot < 0 || portSlot >= MAX_PORT_SLOTS) {
+    throw new Error(
+      `Port slot must be an integer between 0 and ${MAX_PORT_SLOTS - 1}, got ${portSlot}.`,
+    );
+  }
   if (platform === Platform.ANDROID) {
     return {
-      'appium:systemPort': ANDROID_SYSTEM_PORT_BASE + slot,
+      'appium:systemPort': ANDROID_SYSTEM_PORT_BASE + portSlot,
     };
   }
   return {
-    'appium:wdaLocalPort': IOS_WDA_LOCAL_PORT_BASE + slot,
-    'appium:mjpegServerPort': IOS_MJPEG_SERVER_PORT_BASE + slot,
-    'appium:derivedDataPath': path.join(os.tmpdir(), 'appwright-wda', `slot-${slot}`),
+    'appium:wdaLocalPort': IOS_WDA_LOCAL_PORT_BASE + portSlot,
+    'appium:mjpegServerPort': IOS_MJPEG_SERVER_PORT_BASE + portSlot,
+    'appium:derivedDataPath': path.join(os.tmpdir(), 'appwright-wda', `slot-${portSlot}`),
   };
 }
 
 /**
- * Normalises the device configuration into an ordered list of device entries.
- * `devices` wins; otherwise a single `udid` becomes a one-entry list; otherwise the list is
- * empty (legacy behaviour: the provider auto-picks a device for slot 0).
+ * Normalises the device configuration into the project's device pool, in config order.
+ * `devices` wins; otherwise a single `udid` becomes a one-entry pool; otherwise the pool is
+ * empty (legacy behaviour: the provider auto-picks a device for slot 0, with no lease).
  */
 export function resolveDeviceEntries(device: SlotDeviceConfig): DeviceEntry[] {
   let entries: DeviceEntry[];
@@ -80,46 +107,13 @@ export function resolveDeviceEntries(device: SlotDeviceConfig): DeviceEntry[] {
 }
 
 /**
- * Returns the device entry a worker slot should use.
- *
- * - With configured entries: `entries[slot]`, or throws if the slot is out of range.
- * - Without configured entries: `undefined` for slot 0 (legacy auto-pick), throws for any other
- *   slot because more than one worker cannot share an unnamed device.
- */
-export function getDeviceEntryForSlot(
-  device: SlotDeviceConfig,
-  slot: number,
-): DeviceEntry | undefined {
-  assertValidSlot(slot);
-  const entries = resolveDeviceEntries(device);
-  if (entries.length === 0) {
-    if (slot === 0) {
-      return undefined;
-    }
-    throw new Error(
-      `Worker slot ${slot} has no device. Running more than one worker requires listing the ` +
-        'devices in the config, e.g. `device: { devices: [{ udid: "..." }, { udid: "..." }] }`, ' +
-        'or set `workers: 1`.',
-    );
-  }
-  const entry = entries[slot];
-  if (!entry) {
-    throw new Error(
-      `Worker slot ${slot} has no device: only ${entries.length} device(s) configured in ` +
-        '`device.devices`. Add more entries or lower `workers`.',
-    );
-  }
-  return entry;
-}
-
-/**
  * Fails a run whose `workers` exceeds the devices it was given, before anything is booted.
  *
  * Only configs that opt into the `devices` list are checked. `workers` defaults to 2, and a
  * config written before `devices` existed names at most a single `udid`, so checking those would
  * reject them all on upgrade even though Playwright often spawns a single worker anyway
  * (`fullyParallel: false` with one spec file), which is what such runs relied on. They keep
- * working; a second worker instead fails in `getDeviceEntryForSlot` when it asks for its device.
+ * working; a second worker instead fails in `getLeasedDeviceForSlot` when it asks for its device.
  */
 export function assertWorkersFitDevices(
   device: SlotDeviceConfig,
@@ -171,12 +165,6 @@ export function getAppiumPort(): number {
     );
   }
   return port;
-}
-
-function assertValidSlot(slot: number) {
-  if (!Number.isInteger(slot) || slot < 0) {
-    throw new Error(`Worker slot must be a non-negative integer, got ${slot}.`);
-  }
 }
 
 /** Capability names defined by the W3C WebDriver spec; everything else needs a vendor prefix. */
