@@ -37,6 +37,12 @@ import {
  * Setting the value through the prototype setter and dispatching `input` is what React's change
  * tracker listens for, so the owner's `onChange('')` runs before the typing.
  */
+/** Whether the driver rejected an element reference because its node left the page. */
+function isStaleElementError(error: unknown): boolean {
+  const name = (error as { name?: unknown } | null)?.name;
+  return typeof name === 'string' && name.includes(WebDriverErrors.StaleElementReferenceError);
+}
+
 const WEB_CLEAR_SCRIPT = `
   var el = arguments[0];
   var proto = Object.getPrototypeOf(el);
@@ -184,102 +190,105 @@ export class Locator {
     const secret = options?.secret === true;
     const verify = options?.verify !== false;
     const actionOptions = this.toActionOptions(options);
-    const elementId = await this.requireVisibleElementId('fill', actionOptions);
+    return await this.withVisibleElement('fill', actionOptions, async (elementId) => {
+      if (!this.isWeb && !this.webDriverClient.isAndroid) {
+        await this.webDriverClient.elementClick(elementId);
+      }
 
-    if (!this.isWeb && !this.webDriverClient.isAndroid) {
-      await this.webDriverClient.elementClick(elementId);
-    }
-
-    if (!verify) {
-      await this.clearElement(elementId);
-      await this.webDriverClient.elementSendKeys(elementId, value);
-      return;
-    }
-
-    let entered = '';
-    for (let attempt = 1; attempt <= 2; attempt += 1) {
-      await this.clearElement(elementId);
-      await this.webDriverClient.elementSendKeys(elementId, value);
-
-      entered = await this.readValue(elementId);
-      if (Locator.valueMatches(entered, value, secret)) {
+      if (!verify) {
+        await this.clearElement(elementId);
+        await this.webDriverClient.elementSendKeys(elementId, value);
         return;
       }
-    }
 
-    const got = secret ? `${entered.length} character(s)` : JSON.stringify(entered);
-    const expected = secret ? `${value.length} character(s)` : JSON.stringify(value);
-    throw new Error(
-      `Failed to fill: Element ${this.named} holds ${got} after filling ${expected}. ` +
-        'If the field reformats what is typed (input mask, maxLength, autocorrect), pass ' +
-        '`{ verify: false }` and assert with inputValue() instead.',
-    );
+      let entered = '';
+      for (let attempt = 1; attempt <= 2; attempt += 1) {
+        await this.clearElement(elementId);
+        await this.webDriverClient.elementSendKeys(elementId, value);
+
+        entered = await this.readValue(elementId);
+        if (Locator.valueMatches(entered, value, secret)) {
+          return;
+        }
+      }
+
+      const got = secret ? `${entered.length} character(s)` : JSON.stringify(entered);
+      const expected = secret ? `${value.length} character(s)` : JSON.stringify(value);
+      throw new Error(
+        `Failed to fill: Element ${this.named} holds ${got} after filling ${expected}. ` +
+          'If the field reformats what is typed (input mask, maxLength, autocorrect), pass ' +
+          '`{ verify: false }` and assert with inputValue() instead.',
+      );
+    });
   }
 
   @boxedStep
   async clear(options?: ActionOptions): Promise<void> {
-    const elementId = await this.requireVisibleElementId('clear', options);
-    await this.clearElement(elementId);
+    return await this.withVisibleElement('clear', options, async (elementId) => {
+      await this.clearElement(elementId);
+    });
   }
 
   @boxedStep
   async press(key: string, options?: ActionOptions): Promise<void> {
-    const elementId = await this.requireVisibleElementId('press', options);
+    return await this.withVisibleElement('press', options, async (elementId) => {
+      if (this.isWeb || !this.webDriverClient.isAndroid) {
+        // chromedriver and XCUITest both type a "\n" as the Return key without touching the value.
+        await this.webDriverClient.elementSendKeys(elementId, KEY_MAP[key] ?? key);
+        return;
+      }
 
-    if (this.isWeb || !this.webDriverClient.isAndroid) {
-      // chromedriver and XCUITest both type a "\n" as the Return key without touching the value.
-      await this.webDriverClient.elementSendKeys(elementId, KEY_MAP[key] ?? key);
-      return;
-    }
-
-    // Native Android: send key events to the focused field instead of setText (see
-    // ANDROID_KEYCODES). Tapping first puts focus on this element; it does not change the text.
-    await this.webDriverClient.elementClick(elementId);
-    const keycode = ANDROID_KEYCODES[key];
-    if (keycode != null) {
-      await this.webDriverClient.executeScript('mobile: pressKey', [{ keycode }]);
-      return;
-    }
-    await this.webDriverClient.performActions([
-      {
-        type: 'key',
-        id: 'keyboard',
-        actions: key.split('').flatMap((char) => [
-          { type: 'keyDown', value: char },
-          { type: 'keyUp', value: char },
-        ]),
-      },
-    ]);
-    await this.webDriverClient.releaseActions();
+      // Native Android: send key events to the focused field instead of setText (see
+      // ANDROID_KEYCODES). Tapping first puts focus on this element; it does not change the text.
+      await this.webDriverClient.elementClick(elementId);
+      const keycode = ANDROID_KEYCODES[key];
+      if (keycode != null) {
+        await this.webDriverClient.executeScript('mobile: pressKey', [{ keycode }]);
+        return;
+      }
+      await this.webDriverClient.performActions([
+        {
+          type: 'key',
+          id: 'keyboard',
+          actions: key.split('').flatMap((char) => [
+            { type: 'keyDown', value: char },
+            { type: 'keyUp', value: char },
+          ]),
+        },
+      ]);
+      await this.webDriverClient.releaseActions();
+    });
   }
 
   @boxedStep
   async inputValue(options?: ActionOptions): Promise<string> {
-    const elementId = await this.requireVisibleElementId('inputValue', options);
-    return await this.readValue(elementId);
+    return await this.withVisibleElement('inputValue', options, async (elementId) => {
+      return await this.readValue(elementId);
+    });
   }
 
   @boxedStep
   async sendKeyStrokes(value: string, options?: ActionOptions): Promise<void> {
-    const elementId = await this.requireVisibleElementId('sendKeyStrokes', options);
-    await this.webDriverClient.elementClick(elementId);
-    const actions = value
-      .split('')
-      .map((char) => [
-        { type: 'keyDown', value: char },
-        { type: 'keyUp', value: char },
-      ])
-      .flat();
+    return await this.withVisibleElement('sendKeyStrokes', options, async (elementId) => {
+      await this.webDriverClient.elementClick(elementId);
+      const actions = value
+        .split('')
+        .map((char) => [
+          { type: 'keyDown', value: char },
+          { type: 'keyUp', value: char },
+        ])
+        .flat();
 
-    await this.webDriverClient.performActions([
-      {
-        type: 'key',
-        id: 'keyboard',
-        actions: actions,
-      },
-    ]);
+      await this.webDriverClient.performActions([
+        {
+          type: 'key',
+          id: 'keyboard',
+          actions: actions,
+        },
+      ]);
 
-    await this.webDriverClient.releaseActions();
+      await this.webDriverClient.releaseActions();
+    });
   }
 
   async isVisible(options?: ActionOptions): Promise<boolean> {
@@ -325,9 +334,7 @@ export class Locator {
       try {
         isDisplayed = await this.webDriverClient.isElementDisplayed(elementId);
       } catch (error) {
-        //@ts-ignore
-        const errName = error.name;
-        if (errName && errName.includes(WebDriverErrors.StaleElementReferenceError)) {
+        if (isStaleElementError(error)) {
           // A stale node is being re-rendered, not gone: re-find on the next tick for every
           // state, so a transient stale read never counts as "hidden".
           throw new RetryableError(`Stale element detected: ${error}`);
@@ -390,21 +397,24 @@ export class Locator {
 
   @boxedStep
   async tap(options?: ActionOptions) {
-    const elementId = await this.requireVisibleElementId('tap', options);
-    await this.webDriverClient.elementClick(elementId);
+    return await this.withVisibleElement('tap', options, async (elementId) => {
+      await this.webDriverClient.elementClick(elementId);
+    });
   }
 
   @boxedStep
   async getText(options?: ActionOptions): Promise<string> {
-    const elementId = await this.requireVisibleElementId('getText', options);
-    return await this.webDriverClient.getElementText(elementId);
+    return await this.withVisibleElement('getText', options, async (elementId) => {
+      return await this.webDriverClient.getElementText(elementId);
+    });
   }
 
   @boxedStep
   async boundingBox(options?: ActionOptions): Promise<Rect> {
-    const elementId = await this.requireVisibleElementId('boundingBox', options);
-    const { x, y, width, height } = await this.webDriverClient.getElementRect(elementId);
-    return { x, y, width, height };
+    return await this.withVisibleElement('boundingBox', options, async (elementId) => {
+      const { x, y, width, height } = await this.webDriverClient.getElementRect(elementId);
+      return { x, y, width, height };
+    });
   }
 
   @boxedStep
@@ -519,6 +529,27 @@ export class Locator {
    * bare timeout. Finding it again would cost a second lookup per action, and on iOS every XPath
    * lookup is a full page-source snapshot.
    */
+  /**
+   * Runs `act` on the element `requireVisibleElementId()` found. If the element went stale in
+   * between (a framework re-rendered it after the wait), waits and acts once more on the node
+   * that replaced it, as a fresh lookup per action used to do. The driver rejects a stale
+   * element before acting on it, so the action never runs twice on the page.
+   */
+  private async withVisibleElement<T>(
+    action: string,
+    options: ActionOptions | undefined,
+    act: (elementId: string) => Promise<T>,
+  ): Promise<T> {
+    try {
+      return await act(await this.requireVisibleElementId(action, options));
+    } catch (error) {
+      if (!isStaleElementError(error)) {
+        throw error;
+      }
+      return await act(await this.requireVisibleElementId(action, options));
+    }
+  }
+
   private async requireVisibleElementId(action: string, options?: ActionOptions): Promise<string> {
     let elementId: string | null;
     try {

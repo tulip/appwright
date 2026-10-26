@@ -39,7 +39,8 @@ pages at one URL, and in Chrome, which numbers its tabs instead, by the tab's cu
 
 **Locators.** An action (`tap()`, `fill()`, `getText()`, `boundingBox()`, …) acts on the element its
 visibility wait found instead of looking it up once more; on iOS every XPath lookup is a
-page-source snapshot.
+page-source snapshot. If that element went stale in between, it waits and acts once more on the
+node that replaced it.
 
 **Package.** `request` and the types `APIRequest`, `APIRequestContext`, `APIResponse` and
 `TestInfo` are re-exported from `@playwright/test`. The CLI runs Playwright and Appium from

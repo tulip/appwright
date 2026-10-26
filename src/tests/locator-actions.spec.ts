@@ -121,6 +121,30 @@ describe('one lookup per action', () => {
     expect(client.findElements).toHaveBeenCalledTimes(2);
   });
 
+  test('an element re-rendered after the wait is found again, once', async () => {
+    class StaleError extends Error {
+      name = 'stale element reference';
+    }
+    const fresh = { [ELEMENT_REFERENCE_ID]: 'fresh-id' };
+    const client = mockClient({
+      findElements: vi.fn().mockResolvedValueOnce([ELEMENT]).mockResolvedValue([fresh]),
+      elementClick: vi
+        .fn()
+        .mockImplementation(async (id: string) =>
+          id === 'element-id' ? Promise.reject(new StaleError('gone')) : undefined,
+        ),
+    });
+    await nativeLocator(client).tap();
+    expect(calls(client.elementClick)).toEqual([['element-id'], ['fresh-id']]);
+    expect(client.findElements).toHaveBeenCalledTimes(2);
+
+    const stillStale = mockClient({
+      elementClick: vi.fn().mockRejectedValue(new StaleError('gone')),
+    });
+    await expect(nativeLocator(stillStale).tap()).rejects.toThrow('gone');
+    expect(stillStale.elementClick).toHaveBeenCalledTimes(2);
+  });
+
   test('a chained locator looks its parent up once too', async () => {
     const client = mockClient({
       findElementsFromElement: vi.fn().mockResolvedValue([{ [ELEMENT_REFERENCE_ID]: 'child' }]),
