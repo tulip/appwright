@@ -43,8 +43,11 @@ page-source snapshot. If that element went stale in between, it waits and acts o
 node that replaced it.
 
 **Package.** `request` and the types `APIRequest`, `APIRequestContext`, `APIResponse` and
-`TestInfo` are re-exported from `@playwright/test`. The CLI runs Playwright and Appium from
-appwright's own dependencies rather than `npx`, so their bins need not be hoisted.
+`TestInfo` are re-exported from `@playwright/test`. The CLI runs Playwright and Appium by module
+resolution rather than `npx`, so their bins need not be hoisted. Appium is the project's own
+`appium` when it has one, else appwright's, and the run logs which. Playwright is always
+appwright's `@playwright/test`, the one tests import through appwright: a project that pinned a
+different `@playwright/test` and ran its CLI through `npx` now runs appwright's.
 
 **Migration.**
 

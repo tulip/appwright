@@ -28,12 +28,29 @@ export class AppiumPortInUseError extends Error {
   }
 }
 
+let appiumEntry: string | undefined;
+
 /**
- * Appium's CLI from appwright's own dependencies, run with this Node. `npx appium` finds it only
- * when the consumer's install happens to hoist Appium's bin into its own node_modules/.bin.
+ * Appium's CLI entry point: the project's own `appium` when it has one, so a pinned version and
+ * the drivers installed for it keep working, else appwright's. Found by module resolution rather
+ * than `npx appium`, which finds it only when the install hoists Appium's bin into the project's
+ * node_modules/.bin.
  */
+function resolveAppium(): string {
+  if (appiumEntry === undefined) {
+    try {
+      appiumEntry = require.resolve('appium', { paths: [process.cwd()] });
+    } catch {
+      appiumEntry = require.resolve('appium');
+    }
+    logger.log(`Using Appium from ${path.dirname(appiumEntry)}`);
+  }
+  return appiumEntry;
+}
+
+/** Appium's CLI, run with this Node. */
 function appiumCommand(args: string[]): { command: string; args: string[] } {
-  return { command: process.execPath, args: [require.resolve('appium'), ...args] };
+  return { command: process.execPath, args: [resolveAppium(), ...args] };
 }
 
 /** The Appium server spawned by this process, killed by the single `process.on('exit')` guard. */
