@@ -18,10 +18,12 @@ export type LocatorQuery = {
   description?: string;
 };
 
+// A UISearchBar's field reports SearchField, as a SearchView's reports AutoCompleteTextView.
 const IOS_EDITABLE_TYPES = [
   'XCUIElementTypeTextField',
   'XCUIElementTypeSecureTextField',
   'XCUIElementTypeTextView',
+  'XCUIElementTypeSearchField',
 ];
 
 /**

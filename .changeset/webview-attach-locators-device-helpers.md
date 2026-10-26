@@ -60,8 +60,9 @@ appwright's own dependencies rather than `npx`, so their bins need not be hoiste
 - `device.getById()` no longer filters several matches by their text, which is not the id: two
   nodes sharing an id used to resolve to no element at all.
 - `editable: true` (`getByLabel()`, `getById()`) also matches Android's autocomplete fields, which
-  report `AutoCompleteTextView` rather than `EditText` — a `SearchView`'s field is one. A label
-  shared by such a field and an `EditText` now matches both, and the last one wins.
+  report `AutoCompleteTextView` rather than `EditText` — a `SearchView`'s field is one — and iOS
+  search fields (`XCUIElementTypeSearchField`). A label shared by such a field and another text
+  field now matches both, and the last one wins.
 - With Chrome or a Chrome Custom Tab in front on Android, `webView` calls now bind Chrome's
   `WEBVIEW_chrome` page. Before, discovery found no context and retried for about half a minute
   until the app came back to the front, then bound the app's WebView. A test that hands off to a

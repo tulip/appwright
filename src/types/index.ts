@@ -32,7 +32,8 @@ export type LabelOptions = {
   exact?: boolean;
   /**
    * Restrict the match to editable text fields (`EditText` and `AutoCompleteTextView` on
-   * Android; `TextField`, `SecureTextField` and `TextView` on iOS). A web page rendered natively
+   * Android; `TextField`, `SecureTextField`, `TextView` and `SearchField` on iOS, so a search
+   * field matches on both). A web page rendered natively
    * on iOS repeats one label across the field's wrapper, its `<label>` StaticText and the input
    * itself, and a bare label match can land `fill()` on the StaticText. Ignored by
    * `webView.getByLabel()`.

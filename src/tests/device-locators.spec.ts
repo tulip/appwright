@@ -52,7 +52,7 @@ describe('getByLabel', () => {
       'label CONTAINS "Station"',
     );
     expect(compiled(device(false).getByLabel('URL', { editable: true })).selector).toBe(
-      'label == "URL" AND type IN {"XCUIElementTypeTextField", "XCUIElementTypeSecureTextField", "XCUIElementTypeTextView"}',
+      'label == "URL" AND type IN {"XCUIElementTypeTextField", "XCUIElementTypeSecureTextField", "XCUIElementTypeTextView", "XCUIElementTypeSearchField"}',
     );
   });
 
@@ -83,7 +83,7 @@ describe('getById', () => {
       compiled(device(false).getById('DOCPicker.filenameTextField', { editable: true })),
     ).toEqual({
       selector:
-        'name == "DOCPicker.filenameTextField" AND type IN {"XCUIElementTypeTextField", "XCUIElementTypeSecureTextField", "XCUIElementTypeTextView"}',
+        'name == "DOCPicker.filenameTextField" AND type IN {"XCUIElementTypeTextField", "XCUIElementTypeSecureTextField", "XCUIElementTypeTextView", "XCUIElementTypeSearchField"}',
       findStrategy: '-ios predicate string',
     });
   });
