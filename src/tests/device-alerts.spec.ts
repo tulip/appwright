@@ -62,6 +62,15 @@ describe('setAlertAutoAccept / withAlertAutoAccept', () => {
     expect(calls(dismissing.updateSettings).at(-1)).toEqual([{ defaultAlertAction: 'dismiss' }]);
   });
 
+  test("falls back to the requested capabilities when the server's omit them", async () => {
+    const client = mockClient(false, {
+      capabilities: { platformName: 'iOS' },
+      requestedCapabilities: { 'appium:autoAcceptAlerts': true },
+    });
+    await device(client).withAlertAutoAccept(false, async () => undefined);
+    expect(calls(client.updateSettings).at(-1)).toEqual([{ defaultAlertAction: 'accept' }]);
+  });
+
   test("restores the value an earlier setAlertAutoAccept() left, not the capability's", async () => {
     const client = mockClient(false);
     const d = device(client);

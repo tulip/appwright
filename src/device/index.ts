@@ -680,8 +680,21 @@ export class Device {
 
   private currentAlertAction(): string {
     if (this.alertAction === undefined) {
-      const capabilities = (this.webDriverClient.capabilities ?? {}) as Record<string, unknown>;
-      const capability = (name: string) => capabilities[name] ?? capabilities[`appium:${name}`];
+      // What the server returned, then what was requested: a cloud hub may not echo every
+      // capability back, and treating a missing one as `false` would leave auto-accept off.
+      const sources = [
+        this.webDriverClient.capabilities,
+        this.webDriverClient.requestedCapabilities,
+      ].filter((caps): caps is Record<string, unknown> => caps != null && typeof caps === 'object');
+      const capability = (name: string) => {
+        for (const caps of sources) {
+          const value = caps[name] ?? caps[`appium:${name}`];
+          if (value != null) {
+            return value;
+          }
+        }
+        return undefined;
+      };
       this.alertAction =
         capability('autoAcceptAlerts') === true
           ? ALERT_ACCEPT
