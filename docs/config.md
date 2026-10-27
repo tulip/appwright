@@ -329,6 +329,81 @@ export default defineConfig({
 Find the UDIDs with `xcrun xctrace list devices`. Both devices must be connected and trusted before
 the run starts; Appwright does not boot or pair physical devices.
 
+## Video recording
+
+Set Playwright's [`video`](https://playwright.dev/docs/api/class-testoptions#test-options-video)
+option to record the device screen for every test that uses the `device` fixture. The video is
+attached to the test as `video` and plays in the html report's Videos section.
+
+```ts
+export default defineConfig({
+  use: {
+    video: "retain-on-failure",
+  },
+  // ...
+});
+```
+
+It can also be set per project, under that project's `use`. `video.size` is ignored for device
+recordings, which keep the device's own resolution. The modes match Playwright's:
+
+| Mode | Records | Keeps the video |
+| --- | --- | --- |
+| `off` (default) | never | — |
+| `on` | every attempt | always |
+| `retain-on-failure` | every attempt | when the result was not the expected one (failed, timed out) |
+| `on-first-retry` | the first retry only | always |
+
+Each attempt gets its own video, so a retried test has one per attempt in the report. A test in
+a file with several tests gets its own video too.
+
+### Local devices and emulators
+
+For `local-device` and `emulator` projects, appwright starts Appium's screen recording once the
+device is ready and stops it after the test, before the session closes. The video is saved as
+`video.mp4` in the test's output folder.
+
+- **ffmpeg.** Both Appium drivers need ffmpeg on the Appium server's `PATH`: XCUITest for every
+  recording, uiautomator2 to join recordings longer than three minutes. Appwright adds the
+  ffmpeg that ships with it to the end of `PATH` for the Appium server it starts, so an ffmpeg you
+  installed yourself is used first. That ffmpeg must include `libx264`, which iOS recordings are
+  encoded with; some builds (for example LGPL-only ones) leave it out, and recording then fails to
+  start.
+- **An Appium server appwright did not start** (for example one a custom `deviceProvider` connects
+  to) does not get that `PATH`. Without ffmpeg, iOS recordings fail to start, and an Android test
+  longer than three minutes keeps only its last three-minute piece; only the Appium log says so.
+- **Length.** Recordings stop after 15 minutes; a longer test keeps the first 15 minutes. The video
+  comes back from Appium as a single base64 string, and Node cannot hold one longer than about
+  512 MB (a video of about 384 MB). Android records at 1.5 Mbps; with constant scrolling the
+  encoder overshot to about 2.35 Mbps, which is about 265 MB over 15 minutes.
+  iOS has no bit-rate setting; its 10 fps recordings measured about 0.6 Mbps. A recording that
+  still ends up too large cannot be returned, and the test gets a warning instead of a video.
+- **Cost.** Stopping a recording always transfers the whole video from the device, so under
+  `retain-on-failure` a passing test pays for the transfer before its video is discarded.
+- **Hooks.** A `beforeAll` or `afterAll` hook that uses `device`, such as `useCleanDevice()`, gets
+  an Appium session of its own and is not recorded. A `beforeEach` hook shares the test's session
+  and is part of its video.
+- **Android.** `screenrecord` only writes a frame when the screen changes, so a test whose screen
+  never changes produces a video of a single frame. Emulators need Android 8.1 (API 27) or later.
+  Screens the app marks as secure (`FLAG_SECURE`) record as black, and some manufacturers block
+  screen recording on physical devices.
+- **Failures.** If recording cannot start or stop, appwright logs a warning and the test runs
+  without a video; the recording never fails a test. A start failure is usually permanent for the
+  run (no ffmpeg, no `libx264`, an old emulator), so after the first one the worker stops trying
+  and records no more tests. A retry runs in a new worker, which tries again.
+- **Interrupted runs.** Ending the run normally, or pressing Ctrl-C, stops every recording with its
+  session. If the Appium server is killed instead (appwright sends `SIGKILL` when it has not exited
+  5 s after `SIGTERM`), the recorder can outlive it: an iOS `ffmpeg` keeps running and writing to
+  the temp folder until you kill it, and Android's `screenrecord` runs for up to three more minutes
+  and leaves its file in `/sdcard`.
+- **`persistentDevice`.** Tests that use `persistentDevice` are not recorded on local devices and
+  emulators.
+
+### BrowserStack and LambdaTest
+
+These providers record every session themselves; appwright downloads the video after the test and
+attaches it the same way. The `video` option does not turn their recording on or off.
+
 ## Test results per run
 
 Every run writes into its own folders, so two runs started side by side on one machine (for
