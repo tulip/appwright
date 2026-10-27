@@ -12,7 +12,7 @@ import {
 } from '../types';
 import { TimeoutError } from '../types/errors';
 import { WebView } from '../webView';
-import { startScreenRecording } from './recording';
+import { finishRecordingAndClose, startScreenRecording } from './recording';
 import { WorkerInfoStore } from './workerInfo';
 
 type TestLevelFixtures = {
@@ -78,8 +78,7 @@ export const test = base.extend<TestLevelFixtures, WorkerLevelFixtures>({
       providerName: deviceProviderName,
     });
     await use(device);
-    await recording?.finish();
-    await device.close();
+    await finishRecordingAndClose(device, recording);
     await deviceProvider.syncTestDetails?.({
       name: testInfo.title,
       status: testInfo.status,

@@ -1,3 +1,4 @@
+import { constants } from 'buffer';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -5,15 +6,17 @@ import path from 'path';
 import type { TestInfo } from '@playwright/test';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
-import type { Device } from '../device';
+import { Device } from '../device';
+import type * as RecordingModule from '../fixture/recording';
 import {
+  ANDROID_RECORDING_BIT_RATE,
+  finishRecordingAndClose,
   isInsideAllHook,
   normalizeVideoMode,
   recordingOptions,
   RECORDING_TIME_LIMIT_SEC,
   shouldKeepVideo,
   shouldRecordVideo,
-  startScreenRecording,
 } from '../fixture/recording';
 import { Platform } from '../types';
 
@@ -73,16 +76,22 @@ describe('shouldKeepVideo', () => {
 });
 
 describe('recordingOptions', () => {
-  test('Android uses the screenrecord defaults with the longest time limit', () => {
+  test('Android caps the bit rate so the longest recording fits one base64 string', () => {
     expect(recordingOptions(Platform.ANDROID)).toEqual({
-      timeLimit: RECORDING_TIME_LIMIT_SEC,
+      timeLimit: 900,
       forceRestart: true,
+      bitRate: 1_500_000,
     });
+    // The encoder overshoots its target (1.5 Mbps measured 2.35 Mbps while scrolling), so leave
+    // room for 1.6x and still fit a full-length recording in one base64 string.
+    const worstCaseBytes = ((ANDROID_RECORDING_BIT_RATE * 1.6) / 8) * RECORDING_TIME_LIMIT_SEC;
+    expect(Math.ceil((worstCaseBytes * 4) / 3)).toBeLessThan(constants.MAX_STRING_LENGTH * 0.8);
   });
 
   test('iOS encodes browser-playable H.264 with even dimensions', () => {
-    expect(recordingOptions(Platform.IOS)).toMatchObject({
-      timeLimit: RECORDING_TIME_LIMIT_SEC,
+    expect(recordingOptions(Platform.IOS)).toEqual({
+      timeLimit: 900,
+      forceRestart: true,
       videoType: 'libx264',
       pixelFormat: 'yuv420p',
       videoFilters: 'scale=trunc(iw/2)*2:trunc(ih/2)*2',
@@ -111,8 +120,12 @@ describe('isInsideAllHook', () => {
 
 describe('startScreenRecording', () => {
   let outputDir: string;
+  // Fresh module per test: a failed start is remembered for the rest of the worker.
+  let recording: typeof RecordingModule;
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    recording = await vi.importActual<typeof RecordingModule>('../fixture/recording');
     outputDir = fs.mkdtempSync(path.join(os.tmpdir(), 'appwright-recording-'));
     vi.spyOn(console, 'log').mockImplementation(() => {});
   });
@@ -147,22 +160,26 @@ describe('startScreenRecording', () => {
   async function run(
     device: ReturnType<typeof fakeDevice>,
     testInfo: ReturnType<typeof fakeTestInfo>,
-    video: Parameters<typeof startScreenRecording>[2]['video'],
+    video: Parameters<typeof recording.startScreenRecording>[2]['video'],
     providerName = 'emulator',
   ) {
-    return startScreenRecording(device as unknown as Device, testInfo as unknown as TestInfo, {
-      video,
-      providerName,
-    });
+    return recording.startScreenRecording(
+      device as unknown as Device,
+      testInfo as unknown as TestInfo,
+      {
+        video,
+        providerName,
+      },
+    );
   }
 
   test('records and attaches the video as video.mp4 when the mode is on', async () => {
     const device = fakeDevice();
     const testInfo = fakeTestInfo();
-    const recording = await run(device, testInfo, 'on');
+    const started = await run(device, testInfo, 'on');
     expect(device.startScreenRecording).toHaveBeenCalledWith(recordingOptions(Platform.ANDROID));
 
-    await recording!.finish();
+    await started!.finish();
     const videoPath = path.join(outputDir, 'video.mp4');
     expect(testInfo.attachments).toEqual([
       { name: 'video', path: videoPath, contentType: 'video/mp4' },
@@ -179,18 +196,18 @@ describe('startScreenRecording', () => {
   test('stops but discards a passing test under retain-on-failure', async () => {
     const device = fakeDevice();
     const testInfo = fakeTestInfo();
-    const recording = await run(device, testInfo, 'retain-on-failure');
-    await recording!.finish();
-    expect(device.stopScreenRecording).toHaveBeenCalled();
+    const started = await run(device, testInfo, 'retain-on-failure');
+    await started!.finish();
+    expect(device.stopScreenRecording).toHaveBeenCalledTimes(1);
     expect(testInfo.attachments).toEqual([]);
     expect(fs.existsSync(path.join(outputDir, 'video.mp4'))).toBe(false);
   });
 
   test('keeps a failing test under retain-on-failure', async () => {
     const testInfo = fakeTestInfo();
-    const recording = await run(fakeDevice(), testInfo, 'retain-on-failure');
+    const started = await run(fakeDevice(), testInfo, 'retain-on-failure');
     testInfo.status = 'failed';
-    await recording!.finish();
+    await started!.finish();
     expect(testInfo.attachments).toHaveLength(1);
   });
 
@@ -213,11 +230,48 @@ describe('startScreenRecording', () => {
     expect(device.startScreenRecording).not.toHaveBeenCalled();
   });
 
+  test('on-first-retry records the first retry only, through the test info', async () => {
+    const firstAttempt = fakeDevice();
+    expect(await run(firstAttempt, fakeTestInfo({ retry: 0 }), 'on-first-retry')).toBeUndefined();
+    expect(firstAttempt.startScreenRecording).not.toHaveBeenCalled();
+
+    const firstRetry = fakeDevice();
+    const testInfo = fakeTestInfo({ retry: 1 });
+    await (await run(firstRetry, testInfo, 'on-first-retry'))!.finish();
+    expect(firstRetry.startScreenRecording).toHaveBeenCalledTimes(1);
+    expect(testInfo.attachments).toHaveLength(1);
+  });
+
   test('carries on without a video when recording cannot start', async () => {
     const device = fakeDevice({
       startScreenRecording: vi.fn().mockRejectedValue(new Error('ffmpeg not found')),
     });
     expect(await run(device, fakeTestInfo(), 'on')).toBeUndefined();
+  });
+
+  test('warns once and stops trying after a start failure in the worker', async () => {
+    const warn = vi.mocked(console.log);
+    const failing = fakeDevice({
+      startScreenRecording: vi.fn().mockRejectedValue(new Error('ffmpeg not found')),
+    });
+    await run(failing, fakeTestInfo(), 'on');
+    const later = fakeDevice();
+    expect(await run(later, fakeTestInfo({ title: 'later' }), 'on')).toBeUndefined();
+
+    expect(later.startScreenRecording).not.toHaveBeenCalled();
+    const warnings = warn.mock.calls.filter((args) => String(args[1]).includes('did not start'));
+    expect(warnings).toHaveLength(1);
+    expect(String(warnings[0]![1])).toContain('ffmpeg not found');
+  });
+
+  test('attaches nothing when the output folder cannot be created', async () => {
+    const testInfo = fakeTestInfo({
+      outputPath: () => {
+        throw new Error('EACCES');
+      },
+    });
+    await expect((await run(fakeDevice(), testInfo, 'on'))!.finish()).resolves.toBeUndefined();
+    expect(testInfo.attachments).toEqual([]);
   });
 
   test('attaches nothing when stopping fails or returns nothing', async () => {
@@ -235,5 +289,50 @@ describe('startScreenRecording', () => {
       'on',
     ))!.finish();
     expect(empty.attachments).toEqual([]);
+  });
+});
+
+describe('finishRecordingAndClose', () => {
+  const fakeDevice = (calls: string[]) =>
+    ({ close: vi.fn(async () => void calls.push('close')) } as unknown as Device);
+
+  test('stops the recording before the session closes', async () => {
+    const calls: string[] = [];
+    await finishRecordingAndClose(fakeDevice(calls), {
+      finish: async () => void calls.push('finish'),
+    });
+    expect(calls).toEqual(['finish', 'close']);
+  });
+
+  test('closes the session even when finishing throws', async () => {
+    const calls: string[] = [];
+    const finishing = finishRecordingAndClose(fakeDevice(calls), {
+      finish: () => Promise.reject(new Error('disk full')),
+    });
+    await expect(finishing).rejects.toThrow('disk full');
+    expect(calls).toEqual(['close']);
+  });
+
+  test('closes the session when nothing was recorded', async () => {
+    const calls: string[] = [];
+    await finishRecordingAndClose(fakeDevice(calls), undefined);
+    expect(calls).toEqual(['close']);
+  });
+});
+
+describe('Device screen recording', () => {
+  test('passes the options to Appium and returns its base64 video', async () => {
+    const client = {
+      startRecordingScreen: vi.fn().mockResolvedValue(undefined),
+      stopRecordingScreen: vi.fn().mockResolvedValue('dmlkZW8='),
+    };
+    //@ts-ignore partial client
+    const device = new Device(client, 'com.example.app', { expectTimeout: 1_000 }, 'emulator');
+    const options = recordingOptions(Platform.ANDROID);
+
+    await device.startScreenRecording(options);
+    expect(client.startRecordingScreen).toHaveBeenCalledWith(options);
+    expect(await device.stopScreenRecording()).toBe('dmlkZW8=');
+    expect(client.stopRecordingScreen).toHaveBeenCalledWith();
   });
 });

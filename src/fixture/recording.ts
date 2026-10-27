@@ -9,10 +9,21 @@ import { getProviderClass } from '../providers';
 import { Platform } from '../types';
 
 /**
- * Longest recording appwright asks for, in seconds. uiautomator2 rejects a `timeLimit` above 1800
- * (XCUITest allows 4200); a test that runs longer keeps the first 30 minutes.
+ * Longest recording appwright asks for, in seconds; a test that runs longer keeps the first 15
+ * minutes. The drivers allow more (uiautomator2 1800 s, XCUITest 4200 s), but the video comes back
+ * as one base64 string, which Node caps at 536,870,888 characters (about 384 MiB of video). A
+ * recording past that cannot be returned at all, so the length is kept well inside it.
  */
-export const RECORDING_TIME_LIMIT_SEC = 1800;
+export const RECORDING_TIME_LIMIT_SEC = 900;
+
+/**
+ * Android `screenrecord` bit rate, in bits per second. Its own default goes up to 20 Mbps on recent
+ * Android versions, which would pass the base64 limit after a few minutes of a moving screen. The
+ * encoder overshoots its target: a minute of constant scrolling at 1.5 Mbps measured 2.35 Mbps,
+ * which over the full time limit is about 265 MB. Text stayed sharp at 1080x2424. iOS has no
+ * bit-rate option, and its 10 fps H.264 stream ran at about 0.6 Mbps.
+ */
+export const ANDROID_RECORDING_BIT_RATE = 1_500_000;
 
 /** Same normalisation as Playwright's own `video` fixture, including the deprecated alias. */
 export function normalizeVideoMode(video: PlaywrightWorkerOptions['video'] | undefined): VideoMode {
@@ -46,8 +57,9 @@ export function shouldKeepVideo(
 /**
  * `startRecordingScreen` options per platform.
  *
- * - Android records with `adb shell screenrecord` (H.264, plays in the html report as is). The
- *   driver restarts it every 180 s and joins the pieces with ffmpeg on the Appium host.
+ * - Android records with `adb shell screenrecord` (H.264, plays in the html report as is) at
+ *   `ANDROID_RECORDING_BIT_RATE`. The driver restarts it every 180 s and joins the pieces with
+ *   ffmpeg on the Appium host.
  * - iOS pipes WebDriverAgent's MJPEG stream through ffmpeg on the Appium host. The driver's default
  *   `mjpeg` codec does not play in browsers, so encode H.264 in yuv420p, which needs even
  *   dimensions.
@@ -58,7 +70,7 @@ export function shouldKeepVideo(
 export function recordingOptions(platform: Platform): Record<string, unknown> {
   const common = { timeLimit: RECORDING_TIME_LIMIT_SEC, forceRestart: true };
   if (platform === Platform.ANDROID) {
-    return common;
+    return { ...common, bitRate: ANDROID_RECORDING_BIT_RATE };
   }
   return {
     ...common,
@@ -92,6 +104,14 @@ function providerRecordsVideo(providerName: string | undefined): boolean {
   return !!providerName && !!getProviderClass(providerName).downloadVideo;
 }
 
+/**
+ * Why the first recording in this worker failed to start, if one did. A start failure is almost
+ * always permanent for the run (no ffmpeg, an ffmpeg without libx264, an emulator below API 27), so
+ * later tests skip recording instead of failing to start it and warning every time. Retries run in
+ * a new worker, which tries again.
+ */
+let startFailure: string | undefined;
+
 export type ScreenRecording = {
   /** Stops the recording and, when the video mode keeps it, attaches it to the test as `video`. */
   finish(): Promise<void>;
@@ -100,8 +120,9 @@ export type ScreenRecording = {
 /**
  * Starts recording the device screen for one test when Playwright's `video` option asks for it.
  * Returns `undefined` when nothing is recorded: the mode is off for this attempt, the provider
- * records its own video, or the fixture belongs to a `beforeAll` / `afterAll` hook. A recording
- * that fails to start or stop is logged and the test carries on without a video.
+ * records its own video, the fixture belongs to a `beforeAll` / `afterAll` hook, or an earlier
+ * recording in this worker failed to start. A recording that fails to start or stop is logged and
+ * the test carries on without a video.
  */
 export async function startScreenRecording(
   device: Device,
@@ -122,13 +143,16 @@ export async function startScreenRecording(
     logger.log(`Not recording the screen for a beforeAll/afterAll hook in "${testInfo.title}".`);
     return undefined;
   }
+  if (startFailure !== undefined) {
+    return undefined;
+  }
   try {
     await device.startScreenRecording(recordingOptions(device.getPlatform()));
   } catch (error) {
+    startFailure = errorMessage(error);
     logger.warn(
-      `Screen recording did not start; "${testInfo.title}" runs without a video. ${errorMessage(
-        error,
-      )}`,
+      `Screen recording did not start for "${testInfo.title}", so this worker records no more ` +
+        `tests and they run without a video. ${startFailure}`,
     );
     return undefined;
   }
@@ -151,8 +175,10 @@ export async function startScreenRecording(
         logger.warn(`Screen recording for "${testInfo.title}" came back empty; no video attached.`);
         return;
       }
-      const videoPath = testInfo.outputPath('video.mp4');
+      let videoPath: string;
       try {
+        // `outputPath` creates the test's output folder, so it can throw too.
+        videoPath = testInfo.outputPath('video.mp4');
         fs.mkdirSync(path.dirname(videoPath), { recursive: true });
         fs.writeFileSync(videoPath, Buffer.from(base64, 'base64'));
       } catch (error) {
@@ -164,6 +190,21 @@ export async function startScreenRecording(
       testInfo.attachments.push({ name: 'video', path: videoPath, contentType: 'video/mp4' });
     },
   };
+}
+
+/**
+ * Stops the test's recording, then closes the session even if stopping or saving threw, so a
+ * failed save never leaves the Appium session holding the device until `newCommandTimeout`.
+ */
+export async function finishRecordingAndClose(
+  device: Device,
+  recording: ScreenRecording | undefined,
+): Promise<void> {
+  try {
+    await recording?.finish();
+  } finally {
+    await device.close();
+  }
 }
 
 function errorMessage(error: unknown): string {
