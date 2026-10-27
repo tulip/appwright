@@ -138,7 +138,8 @@ Things to remember while writing the tests:
 ### Test reporting
 
 WIP: on `local-device` and `emulator` projects, `persistentDevice` tests are not recorded. Tests
-that use the `device` fixture are; see [Video recording](config.md#video-recording).
+that use the `device` fixture are recorded when Playwright's `video` option is set; see
+[Video recording](config.md#video-recording).
 
 ## More info
 

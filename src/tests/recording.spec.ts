@@ -228,6 +228,11 @@ describe('startScreenRecording', () => {
     const testInfo = fakeTestInfo({ _currentHookType: () => 'beforeAll' });
     expect(await run(device, testInfo, 'on')).toBeUndefined();
     expect(device.startScreenRecording).not.toHaveBeenCalled();
+    // The hook's test info belongs to a neighbouring test, so the log must not name it.
+    const logged = vi.mocked(console.log).mock.calls.map((args) => String(args[1]));
+    expect(logged).toEqual([
+      'Not recording the device session of a beforeAll/afterAll hook; only tests are.',
+    ]);
   });
 
   test('on-first-retry records the first retry only, through the test info', async () => {

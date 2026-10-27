@@ -140,7 +140,8 @@ export async function startScreenRecording(
     return undefined;
   }
   if (isInsideAllHook(testInfo)) {
-    logger.log(`Not recording the screen for a beforeAll/afterAll hook in "${testInfo.title}".`);
+    // `testInfo` here belongs to a test next to the hook, so its title would name the wrong thing.
+    logger.log('Not recording the device session of a beforeAll/afterAll hook; only tests are.');
     return undefined;
   }
   if (startFailure !== undefined) {

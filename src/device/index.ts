@@ -1022,6 +1022,10 @@ export class Device {
 
   /**
    * Starts Appium's screen recording for this session.
+   *
+   * Do not call this from a test: when Playwright's `video` option is set, the `device` fixture is
+   * already recording, and a second start replaces that recording, so the test's video loses
+   * everything before the call.
    * @internal Used by the `device` fixture to record each test
    */
   async startScreenRecording(options: Record<string, unknown>): Promise<void> {
@@ -1030,6 +1034,9 @@ export class Device {
 
   /**
    * Stops the screen recording and returns the video as base64 (empty when nothing was recorded).
+   *
+   * Do not call this from a test: the `device` fixture stops its own recording after the test, and
+   * a stop from the test leaves it nothing to attach.
    * @internal Used by the `device` fixture to record each test
    */
   async stopScreenRecording(): Promise<string> {
