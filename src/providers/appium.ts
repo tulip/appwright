@@ -4,6 +4,8 @@ import net from 'net';
 import path from 'path';
 import { promisify } from 'util';
 
+import ffmpegInstaller from '@ffmpeg-installer/ffmpeg';
+
 import { logger } from '../logger';
 import { getLatestBuildToolsVersions } from '../utils';
 
@@ -97,6 +99,24 @@ function forwardLines(prefix: string, data: Buffer, log: (...args: any[]) => voi
 }
 
 /**
+ * `PATH` for the Appium server with the ffmpeg bundled by `@ffmpeg-installer/ffmpeg` appended.
+ * Both drivers look ffmpeg up on `PATH` for screen recording (XCUITest always, uiautomator2 to
+ * join recordings longer than 180 s). Appended rather than prepended so an ffmpeg the user
+ * installed wins.
+ */
+export function pathWithBundledFfmpeg(
+  currentPath: string | undefined,
+  ffmpegPath: string = ffmpegInstaller.path,
+): string {
+  const ffmpegDir = path.dirname(ffmpegPath);
+  const entries = (currentPath ?? '').split(path.delimiter).filter((entry) => entry.length > 0);
+  if (entries.includes(ffmpegDir)) {
+    return entries.join(path.delimiter);
+  }
+  return [...entries, ffmpegDir].join(path.delimiter);
+}
+
+/**
  * Spawns one Appium server on `port` and resolves with the child process once the REST
  * listener is up. Rejects on EADDRINUSE, spawn errors, or if the process exits before it is ready.
  * Never passes `--session-override` (it would delete every other live session on a new session).
@@ -104,12 +124,15 @@ function forwardLines(prefix: string, data: Buffer, log: (...args: any[]) => voi
 export async function startAppiumServer(port: number): Promise<ChildProcess> {
   return new Promise<ChildProcess>((resolve, reject) => {
     let settled = false;
+    // Windows spells it `Path`; adding a second `PATH` key would leave the child with both.
+    const pathKey = Object.keys(process.env).find((key) => key.toUpperCase() === 'PATH') ?? 'PATH';
     // https://github.com/appium/appium-uiautomator2-driver?tab=readme-ov-file#automatic-discovery-of-compatible-chromedriver
     const appiumProcess = spawn(
       'npx',
       ['appium', '--port', String(port), '--allow-insecure=uiautomator2:chromedriver_autodownload'],
       {
         stdio: 'pipe',
+        env: { ...process.env, [pathKey]: pathWithBundledFfmpeg(process.env[pathKey]) },
       },
     );
     trackedAppiumProcess = appiumProcess;

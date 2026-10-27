@@ -329,6 +329,63 @@ export default defineConfig({
 Find the UDIDs with `xcrun xctrace list devices`. Both devices must be connected and trusted before
 the run starts; Appwright does not boot or pair physical devices.
 
+## Video recording
+
+Set Playwright's [`video`](https://playwright.dev/docs/api/class-testoptions#test-options-video)
+option to record the device screen for every test that uses the `device` fixture. The video is
+attached to the test as `video` and plays in the html report's Videos section.
+
+```ts
+export default defineConfig({
+  use: {
+    video: "retain-on-failure",
+  },
+  // ...
+});
+```
+
+It can also be set per project, under that project's `use`. The modes match Playwright's:
+
+| Mode | Records | Keeps the video |
+| --- | --- | --- |
+| `off` (default) | never | — |
+| `on` | every attempt | always |
+| `retain-on-failure` | every attempt | when the result was not the expected one (failed, timed out) |
+| `on-first-retry` | the first retry only | always |
+
+Each attempt gets its own video, so a retried test has one per attempt in the report. A test in
+a file with several tests gets its own video too.
+
+### Local devices and emulators
+
+For `local-device` and `emulator` projects, appwright starts Appium's screen recording once the
+device is ready and stops it after the test, before the session closes. The video is saved as
+`video.mp4` in the test's output folder.
+
+- **ffmpeg.** Both Appium drivers need ffmpeg on the Appium server's `PATH`: XCUITest for every
+  recording, uiautomator2 to join recordings longer than three minutes. Appwright adds the
+  ffmpeg that ships with it to the end of `PATH` for the Appium server it starts, so an ffmpeg you
+  installed yourself is used first.
+- **Length.** Recordings stop after 30 minutes (uiautomator2's limit); a longer test keeps the
+  first 30 minutes.
+- **Hooks.** A `beforeAll` or `afterAll` hook that uses `device`, such as `useCleanDevice()`, gets
+  an Appium session of its own and is not recorded. A `beforeEach` hook shares the test's session
+  and is part of its video.
+- **Android.** `screenrecord` only writes a frame when the screen changes, so a test whose screen
+  never changes produces a video of a single frame. Emulators need Android 8.1 (API 27) or later.
+  Screens the app marks as secure
+  (`FLAG_SECURE`) record as black, and some manufacturers block screen recording on physical
+  devices.
+- **Failures.** If recording cannot start or stop, appwright logs a warning and the test runs
+  without a video; the recording never fails a test.
+- **`persistentDevice`.** Tests that use `persistentDevice` are not recorded on local devices and
+  emulators.
+
+### BrowserStack and LambdaTest
+
+These providers record every session themselves; appwright downloads the video after the test and
+attaches it the same way. The `video` option does not turn their recording on or off.
+
 ## Test results per run
 
 Every run writes into its own folders, so two runs started side by side on one machine (for

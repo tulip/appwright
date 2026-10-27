@@ -1020,6 +1020,22 @@ export class Device {
     return await this.webDriverClient.executeScript(scriptString, []);
   }
 
+  /**
+   * Starts Appium's screen recording for this session.
+   * @internal Used by the `device` fixture to record each test
+   */
+  async startScreenRecording(options: Record<string, unknown>): Promise<void> {
+    await this.webDriverClient.startRecordingScreen(options);
+  }
+
+  /**
+   * Stops the screen recording and returns the video as base64 (empty when nothing was recorded).
+   * @internal Used by the `device` fixture to record each test
+   */
+  async stopScreenRecording(): Promise<string> {
+    return await this.webDriverClient.stopRecordingScreen();
+  }
+
   async getWindowHandles(): Promise<string[]> {
     return await this.webDriverClient.getWindowHandles();
   }

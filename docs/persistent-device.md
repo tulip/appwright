@@ -137,7 +137,8 @@ Things to remember while writing the tests:
 
 ### Test reporting
 
-WIP: `persistentDevice` does not support video recordings.
+WIP: on `local-device` and `emulator` projects, `persistentDevice` tests are not recorded. Tests
+that use the `device` fixture are; see [Video recording](config.md#video-recording).
 
 ## More info
 
