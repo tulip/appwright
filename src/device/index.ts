@@ -1595,6 +1595,11 @@ export class Device {
    * page, and bind the page with `webView.attach({ page })`: plain discovery would bind the first
    * WebView, not the new one. Leaves the session in NATIVE_APP.
    *
+   * A page is told apart from `notIn` by its key alone. On iOS a cross-site navigation may move
+   * a WKWebView's page to a new web content process, listed under a new key, and then this
+   * returns that page as new; pass `url` to wait for the page you mean. That case has not been
+   * checked on a simulator.
+   *
    * **Usage:**
    * ```js
    * const before = await device.webPages();
@@ -1610,8 +1615,9 @@ export class Device {
     timeout = WEB_PAGE_TIMEOUT_MS,
     pollInterval = WEB_PAGE_POLL_MS,
   }: WaitForWebPageOptions = {}): Promise<WebPage> {
-    // A page keeps its key through reloads and navigations on both platforms, so a page under a
-    // new key is new even at a URL `notIn` has: a second tab, the WebView an app rebuilt.
+    // A page keeps its key through reloads and same-site navigations on both platforms, so a page
+    // under a new key is new even at a URL `notIn` has: a second tab, the WebView an app rebuilt.
+    // Unverified: an iOS cross-site navigation may re-key the page (see the doc above).
     const knownKeys = new Set(notIn.map((page) => page.key));
     const deadline = Date.now() + timeout;
 

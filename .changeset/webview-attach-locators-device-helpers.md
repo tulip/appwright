@@ -8,12 +8,17 @@ WebDriver client or by guessing from the host.
 **WebView.** `webView.attach({ context, pageUrl, probeSelector, timeout, settle })` binds the
 session to a live page after the app reloads or rebuilds its WebView, after a relaunch, or in a
 browser it handed off to. Other `webView` calls only check that some WEBVIEW context is current,
-which stays true once the page behind it is gone. With a Chrome Custom Tab in front, discovery now
-finds Chrome's `WEBVIEW_chrome` context instead of nothing. On Android, when a WebView's renderer
-drops its connection and chromedriver answers `invalid session id` while Appium's session lives
-on, `webView` actions and `attach()` re-attach and retry instead of failing.
-`webView.getByRole(role, { name, exact, level })` matches ARIA roles, explicit and implicit, by
-accessible name. Locators chain: `getByText`, `getByRole`, `getByLabel` and `getByTestId` on a
+which stays true once the page behind it is gone. What `attach()` bound (the context and, on
+Android, its window) stays bound across native `device` calls while it lasts. Discovery never binds
+a browser: with Chrome or a Custom Tab in front, `attach({ context: 'WEBVIEW_chrome' })` does, and
+discovery's error says so. A bound browser is left, with a log line, by the first `webView` call
+made once the app is back in front. On Android, when a WebView's renderer drops its connection and
+chromedriver answers `invalid session id` while Appium's session lives on, `webView` actions,
+`evaluate()` and `attach()` bind again what was bound and retry instead of failing; if the window
+`attach()` bound is gone, they fail saying so rather than act on another page. The renderer-drop
+recovery is unit-tested only. `webView.getByRole(role, { name, exact, level })` matches ARIA roles,
+explicit and implicit, by accessible name, reading names through `<slot>`s and hidden state through
+shadow hosts. Locators chain: `getByText`, `getByRole`, `getByLabel` and `getByTestId` on a
 locator look inside its element. `getByTestId()` and `getByPlaceholder()` escape quotes.
 
 **Device.** `getPageSource()` (reads the native tree, restores the WebView), `switchToWindow()` /
@@ -27,7 +32,7 @@ the window shape agree; `getOrientation()` and `getWindowRect()` read them. The 
 rotates the device back to the configured `device.orientation` after a test that rotated, since a
 rotation outlives the session. `drag({ from, to })` and `swipeFromEdge('left' | 'right')` are W3C
 touch gestures, and `pressBack()` is Android's back key. `locator.boundingBox()` measures an
-element. On iOS, where every provider starts the session with `appium:autoAcceptAlerts`,
+element, or returns `null` when it is hidden, as Playwright's does. On iOS, where every provider starts the session with `appium:autoAcceptAlerts`,
 `withAlertAutoAccept(false, fn)` / `setAlertAutoAccept()` keep WebDriverAgent from answering the
 app's own alerts, and `acceptAlert()` / `dismissAlert()` / `getAlertText()` answer them on both
 platforms.
@@ -42,7 +47,9 @@ pages at one URL, and in Chrome, which numbers its tabs instead, by the tab's cu
 **Locators.** An action (`tap()`, `fill()`, `getText()`, `boundingBox()`, …) acts on the element its
 visibility wait found instead of looking it up once more; on iOS every XPath lookup is a
 page-source snapshot. If that element went stale in between, it waits and acts once more on the
-node that replaced it.
+node that replaced it. A case-insensitive RegExp in `device.getByText()` is tested against every
+element rather than narrowed to a case-sensitive substring that missed other casings, and the
+substring a RegExp is narrowed to has its quotes escaped.
 
 **Package.** `request` and the types `APIRequest`, `APIRequestContext`, `APIResponse` and
 `TestInfo` are re-exported from `@playwright/test`. The CLI runs Playwright and Appium by module
@@ -68,11 +75,16 @@ different `@playwright/test` and ran its CLI through `npx` now runs appwright's.
   report `AutoCompleteTextView` rather than `EditText` — a `SearchView`'s field is one — and iOS
   search fields (`XCUIElementTypeSearchField`). A label shared by such a field and another text
   field now matches both, and the last one wins.
-- With Chrome or a Chrome Custom Tab in front on Android, `webView` calls now bind Chrome's
-  `WEBVIEW_chrome` page. Before, discovery found no context and retried for about half a minute
-  until the app came back to the front, then bound the app's WebView. A test that hands off to a
-  browser and expects the app's page should call `webView.attach()` once the browser has closed,
-  which binds the app in front again.
+- A visibility wait, and the action after it, take the last *displayed* match instead of the last
+  match: a hidden duplicate later in the page (a closed menu, an off-screen copy) no longer makes
+  `tap()` wait on it until "not visible", and the locator counts as hidden only while no match is
+  displayed. `expect(locator).not.toBeVisible()` therefore fails while any match is displayed,
+  where it used to pass when the last one was hidden.
+- A closed window or a deleted session found by a locator now surfaces as the driver's own error
+  (named `no such window` or `invalid session id`) instead of a `NonRetryableError` copy named
+  `NoSuchWindowError`, and errors from `webView` locators keep their class: a `TimeoutError` from
+  `webView` stays one, so `expect(webViewLocator).not.toBeVisible()` fails as an assertion
+  (and `expect.soft` stays soft) instead of throwing.
 - The exported `AppwrightLocator` interface has new required members: `boundingBox()`,
   `getByText()`, `getByRole()`, `getByLabel()` and `getByTestId()`. Code that only calls locators
   is unaffected; a class that `implements AppwrightLocator`, or a typed test double, has to add
