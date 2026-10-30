@@ -114,6 +114,23 @@ describe('getByText', () => {
       'label CONTAINS "Say \\"hi\\""',
     );
   });
+
+  test("a RegExp's narrowing substring is escaped too", () => {
+    expect(compiled(device(true).getByText(/(say "hi")/)).selector).toBe(
+      'textContains("say \\"hi\\"")',
+    );
+    expect(compiled(device(false).getByText(/(say "hi")/)).selector).toBe(
+      'label CONTAINS "say \\"hi\\""',
+    );
+  });
+
+  test('a case-insensitive RegExp is not narrowed to a case-sensitive substring', () => {
+    for (const isAndroid of [true, false]) {
+      const locator = device(isAndroid).getByText(/(save)/i);
+      expect(compiled(locator)).toEqual({ selector: '//*', findStrategy: 'xpath' });
+      expect((locator as unknown as { textToMatch: RegExp }).textToMatch).toEqual(/(save)/i);
+    }
+  });
 });
 
 describe('getByIosPredicate / getByAndroidUiAutomator', () => {

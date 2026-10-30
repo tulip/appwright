@@ -52,13 +52,14 @@ export function nativeTextQuery(
     if (text.global || text.sticky) {
       text = new RegExp(text.source, text.flags.replace(/[gy]/g, ''));
     }
-    const substringForContains = longestDeterministicGroup(text);
+    // `textContains` and `CONTAINS` compare case-sensitively, so an `i` RegExp is not narrowed:
+    // `/(save)/i` narrowed to "save" would never see "Save".
+    const substringForContains = text.ignoreCase ? undefined : longestDeterministicGroup(text);
     if (!substringForContains) {
       return { selector: '//*', findStrategy: 'xpath', textToMatch: text };
     }
-    const selector = isAndroid
-      ? `textContains("${substringForContains}")`
-      : `label CONTAINS "${substringForContains}"`;
+    const quoted = escapeQuotes(substringForContains);
+    const selector = isAndroid ? `textContains("${quoted}")` : `label CONTAINS "${quoted}"`;
     return { selector, findStrategy: strategyFor(isAndroid), textToMatch: text };
   }
   const quoted = escapeQuotes(text);
