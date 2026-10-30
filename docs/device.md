@@ -184,9 +184,10 @@ await device.activateApp();
   foreground, e.g. a browser closing itself once an auth flow redirects back to the app.
 
 To drive the page a browser shows rather than its native chrome, bind it with
-`webView.attach({ pageUrl })` (see [Attaching to a page](locators.md#attaching-to-a-page)). With
-Chrome in front, discovery picks Chrome's `WEBVIEW_chrome` context, so after the browser closes,
-attach again to get back to the app's own WebView.
+`webView.attach({ context: 'WEBVIEW_chrome', pageUrl })` (see
+[Attaching to a page](locators.md#attaching-to-a-page)). Discovery never binds a browser on its
+own, and once the app is back in front the next `webView` call leaves the browser for the app's
+own WebView.
 
 ## Pages in WebViews
 

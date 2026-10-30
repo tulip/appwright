@@ -9,14 +9,16 @@ WebDriver client or by guessing from the host.
 session to a live page after the app reloads or rebuilds its WebView, after a relaunch, or in a
 browser it handed off to. Other `webView` calls only check that some WEBVIEW context is current,
 which stays true once the page behind it is gone. What `attach()` bound (the context and, on
-Android, its window) stays bound across native `device` calls while it lasts. Discovery never binds
-a browser: with Chrome or a Custom Tab in front, `attach({ context: 'WEBVIEW_chrome' })` does, and
-discovery's error says so. A bound browser is left, with a log line, by the first `webView` call
-made once the app is back in front. On Android, when a WebView's renderer drops its connection and
-chromedriver answers `invalid session id` while Appium's session lives on, `webView` actions,
-`evaluate()` and `attach()` bind again what was bound and retry instead of failing; if the window
-`attach()` bound is gone, they fail saying so rather than act on another page. The renderer-drop
-recovery is unit-tested only. `webView.getByRole(role, { name, exact, level })` matches ARIA roles,
+Android, the window `page` or `pageUrl` chose) stays bound across native `device` calls while it
+lasts and its app or browser is in front; then the next `webView` call logs why and discovers
+again. Discovery never binds a browser: with Chrome or a Custom Tab in front,
+`attach({ context: 'WEBVIEW_chrome' })` does, and discovery fails within a few seconds saying so.
+On Android, when a WebView's renderer drops its connection and chromedriver answers
+`invalid session id` while Appium's session lives on, `webView` actions, `evaluate()` and
+`attach()` bind again what was bound and retry instead of failing. A window that closed under an
+action is recovered the same way. If the window `attach()` chose is gone, they fail saying so
+rather than act on another page. The renderer-drop and closed-window recovery and the browser
+binding are unit-tested only. `webView.getByRole(role, { name, exact, level })` matches ARIA roles,
 explicit and implicit, by accessible name, reading names through `<slot>`s and hidden state through
 shadow hosts. Locators chain: `getByText`, `getByRole`, `getByLabel` and `getByTestId` on a
 locator look inside its element. `getByTestId()` and `getByPlaceholder()` escape quotes.
@@ -47,9 +49,11 @@ pages at one URL, and in Chrome, which numbers its tabs instead, by the tab's cu
 **Locators.** An action (`tap()`, `fill()`, `getText()`, `boundingBox()`, …) acts on the element its
 visibility wait found instead of looking it up once more; on iOS every XPath lookup is a
 page-source snapshot. If that element went stale in between, it waits and acts once more on the
-node that replaced it. A case-insensitive RegExp in `device.getByText()` is tested against every
-element rather than narrowed to a case-sensitive substring that missed other casings, and the
-substring a RegExp is narrowed to has its quotes escaped.
+node that replaced it. A chained locator's visibility wait looks under every one of the parent's
+matches while the child's matches so far are hidden. A case-insensitive RegExp in
+`device.getByText()` is narrowed case-insensitively (`textMatches("(?is)…")` on Android,
+`CONTAINS[c]` on iOS, unit-tested only) rather than to a case-sensitive substring that missed
+other casings, and the substring a RegExp is narrowed to has its quotes escaped.
 
 **Package.** `request` and the types `APIRequest`, `APIRequestContext`, `APIResponse` and
 `TestInfo` are re-exported from `@playwright/test`. The CLI runs Playwright and Appium by module
@@ -79,7 +83,13 @@ different `@playwright/test` and ran its CLI through `npx` now runs appwright's.
   match: a hidden duplicate later in the page (a closed menu, an off-screen copy) no longer makes
   `tap()` wait on it until "not visible", and the locator counts as hidden only while no match is
   displayed. `expect(locator).not.toBeVisible()` therefore fails while any match is displayed,
-  where it used to pass when the last one was hidden.
+  where it used to pass when the last one was hidden. A chained locator does the same across its
+  parent's matches.
+- `device.getByText(/(save)/i)` now also finds "Save": the driver's search was narrowed
+  case-sensitively before, so other casings never matched, and the element that wins can change.
+- A `webView` action or `evaluate()` whose window closed under it binds again and retries, as the
+  recovery always meant to (it gave up at once). After `attach()` chose that window with `page`
+  or `pageUrl`, it fails saying the window is gone instead.
 - A closed window or a deleted session found by a locator now surfaces as the driver's own error
   (named `no such window` or `invalid session id`) instead of a `NonRetryableError` copy named
   `NoSuchWindowError`, and errors from `webView` locators keep their class: a `TimeoutError` from
