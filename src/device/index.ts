@@ -1373,6 +1373,7 @@ export class Device {
    * **Usage:**
    * ```js
    * const box = await device.getById("slider-thumb").boundingBox();
+   * if (!box) throw new Error("The slider thumb is hidden");
    * const y = box.y + box.height / 2;
    * await device.drag({ from: { x: box.x + 5, y }, to: { x: box.x + 200, y } });
    * ```

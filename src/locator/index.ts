@@ -31,18 +31,18 @@ import {
   webTextQuery,
 } from './queries';
 
-/**
- * Empties an `<input>`/`<textarea>` the way React notices. chromedriver's `elementClear` fires
- * only `change`, and a controlled input whose owner never saw the edit keeps its old state.
- * Setting the value through the prototype setter and dispatching `input` is what React's change
- * tracker listens for, so the owner's `onChange('')` runs before the typing.
- */
 /** Whether the driver rejected an element reference because its node left the page. */
 function isStaleElementError(error: unknown): boolean {
   const name = (error as { name?: unknown } | null)?.name;
   return typeof name === 'string' && name.includes(WebDriverErrors.StaleElementReferenceError);
 }
 
+/**
+ * Empties an `<input>`/`<textarea>` the way React notices. chromedriver's `elementClear` fires
+ * only `change`, and a controlled input whose owner never saw the edit keeps its old state.
+ * Setting the value through the prototype setter and dispatching `input` is what React's change
+ * tracker listens for, so the owner's `onChange('')` runs before the typing.
+ */
 const WEB_CLEAR_SCRIPT = `
   var el = arguments[0];
   var proto = Object.getPrototypeOf(el);
@@ -311,6 +311,10 @@ export class Locator {
    * Polls until the element is in `state`, then returns the reference id of the element the
    * poll found there (`null` for 'hidden', which nothing need match), so an action can use it
    * without looking the element up again. `timeout: 0` makes a single attempt.
+   *
+   * 'visible' takes the displayed match `displayedMatch()` picks, so a hidden duplicate (a
+   * closed menu, an off-screen copy) never stands in for the one on screen; 'hidden' holds
+   * while no match is displayed. 'attached' takes the match `getElement()` returns.
    */
   private async waitForElementId(
     state: ElementState,
@@ -318,18 +322,38 @@ export class Locator {
   ): Promise<string | null> {
     const timeout = options?.timeout ?? this.timeoutOpts.expectTimeout;
     return await this.waitUntil(async () => {
-      const element = await this.getElement();
-      const elementId = element?.[ELEMENT_REFERENCE_ID];
-
-      if (!elementId) {
-        // Nothing matches: that is exactly 'hidden', and not yet 'attached' or 'visible'.
-        return state === 'hidden' ? null : false;
-      }
-
       if (state === 'attached') {
-        return elementId;
+        const element = await this.getElement();
+        return element?.[ELEMENT_REFERENCE_ID] || false;
       }
+      const displayed = await this.displayedMatch();
+      if (state === 'hidden') {
+        return displayed == null ? null : false;
+      }
+      return displayed || false;
+    }, timeout).catch((error: unknown) => {
+      if (error instanceof TimeoutError) {
+        const what = state === 'hidden' ? 'was still on the screen' : `did not become ${state}`;
+        throw new TimeoutError(`Element ${this.named} ${what} after ${timeout}ms`);
+      }
+      throw error;
+    });
+  }
 
+  /**
+   * The reference id of the first displayed element among `matches()` — the last displayed one
+   * in document order — or `null` when elements match but none is displayed, or `undefined` when
+   * none matches. Each match costs a display check until one passes, so a locator with many
+   * hidden matches costs one check per match per poll.
+   */
+  private async displayedMatch(): Promise<string | null | undefined> {
+    let matched = false;
+    for await (const element of this.matches()) {
+      const elementId = element[ELEMENT_REFERENCE_ID];
+      if (!elementId) {
+        continue;
+      }
+      matched = true;
       let isDisplayed: boolean;
       try {
         isDisplayed = await this.webDriverClient.isElementDisplayed(elementId);
@@ -341,18 +365,11 @@ export class Locator {
         }
         throw error;
       }
-
-      if (state === 'hidden') {
-        return isDisplayed ? false : null;
+      if (isDisplayed) {
+        return elementId;
       }
-      return isDisplayed ? elementId : false;
-    }, timeout).catch((error: unknown) => {
-      if (error instanceof TimeoutError) {
-        const what = state === 'hidden' ? 'was still on the screen' : `did not become ${state}`;
-        throw new TimeoutError(`Element ${this.named} ${what} after ${timeout}ms`);
-      }
-      throw error;
-    });
+    }
+    return matched ? null : undefined;
   }
 
   private async waitUntil<ReturnValue>(
@@ -412,11 +429,43 @@ export class Locator {
   }
 
   @boxedStep
-  async boundingBox(options?: ActionOptions): Promise<Rect> {
-    return await this.withVisibleElement('boundingBox', options, async (elementId) => {
+  async boundingBox(options?: ActionOptions): Promise<Rect | null> {
+    const read = async () => {
+      const elementId = await this.waitForMatch(options);
+      if (elementId == null) {
+        return null;
+      }
       const { x, y, width, height } = await this.webDriverClient.getElementRect(elementId);
       return { x, y, width, height };
-    });
+    };
+    try {
+      return await read();
+    } catch (error) {
+      // As `withVisibleElement()`: the node was re-rendered between the wait and the read.
+      if (!isStaleElementError(error)) {
+        throw error;
+      }
+      return await read();
+    }
+  }
+
+  /**
+   * Waits for anything to match, as Playwright's `boundingBox()` does, then returns the
+   * displayed match's reference id, or `null` when every match is hidden.
+   */
+  private async waitForMatch(options?: ActionOptions): Promise<string | null> {
+    const timeout = options?.timeout ?? this.timeoutOpts.expectTimeout;
+    try {
+      return await this.waitUntil(async () => {
+        const displayed = await this.displayedMatch();
+        return displayed === undefined ? false : displayed;
+      }, timeout);
+    } catch (error) {
+      if (error instanceof TimeoutError) {
+        throw new Error(`Failed to boundingBox: Element ${this.named} is not found`);
+      }
+      throw error;
+    }
   }
 
   @boxedStep
@@ -534,12 +583,6 @@ export class Locator {
   }
 
   /**
-   * Waits for the element to be visible and returns the reference id the wait found it under,
-   * or throws with the action's name so the failure reads as "Failed to fill: …" rather than a
-   * bare timeout. Finding it again would cost a second lookup per action, and on iOS every XPath
-   * lookup is a full page-source snapshot.
-   */
-  /**
    * Runs `act` on the element `requireVisibleElementId()` found. If the element went stale in
    * between (a framework re-rendered it after the wait), waits and acts once more on the node
    * that replaced it, as a fresh lookup per action used to do. The driver rejects a stale
@@ -560,6 +603,12 @@ export class Locator {
     }
   }
 
+  /**
+   * Waits for the element to be visible and returns the reference id the wait found it under,
+   * or throws with the action's name so the failure reads as "Failed to fill: …" rather than a
+   * bare timeout. Finding it again would cost a second lookup per action, and on iOS every XPath
+   * lookup is a full page-source snapshot.
+   */
   private async requireVisibleElementId(action: string, options?: ActionOptions): Promise<string> {
     let elementId: string | null;
     try {

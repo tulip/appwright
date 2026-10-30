@@ -761,17 +761,20 @@ export interface AppwrightLocator {
   getText(options?: ActionOptions): Promise<string>;
 
   /**
-   * The element's position and size, as Playwright's `boundingBox()` gives them. Waits for the
-   * element to be visible first. Natively the rectangle is in the driver's units — points on iOS,
+   * The element's position and size, or `null` when it is not visible, as Playwright's
+   * `boundingBox()` gives them. Waits for something to match (and throws, saying the element is
+   * not found, if nothing does within the timeout), then reads the displayed match without
+   * waiting for one to show. Natively the rectangle is in the driver's units — points on iOS,
    * physical pixels on Android, the units of `device.getWindowRect()` and `device.drag()` — and
    * in a WebView it is in the page's CSS pixels, relative to the document.
    *
    * **Usage:**
    * ```js
-   * const { width, height } = await device.getByText("Welcome").boundingBox();
+   * const box = await device.getByText("Welcome").boundingBox();
+   * expect(box?.width).toBeGreaterThan(0); // null while the element is hidden
    * ```
    */
-  boundingBox(options?: ActionOptions): Promise<Rect>;
+  boundingBox(options?: ActionOptions): Promise<Rect | null>;
 
   scroll(direction: ScrollDirection): Promise<void>;
 
