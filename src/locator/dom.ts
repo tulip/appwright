@@ -115,13 +115,39 @@ export function queryDom(root: Element | null, query: DomQuery): Element[] {
       : (value) => normalize(value).indexOf(wanted) !== -1;
   }
 
-  /** `aria-hidden` or `display: none` on the element or an ancestor, or `visibility: hidden`. */
+  /**
+   * The element's parent as rendered: the `<slot>` it is assigned to, else its parent, else, at
+   * the top of a shadow tree, the shadow host.
+   */
+  function renderedParent(el: Element): Element | null {
+    if (el.assignedSlot) {
+      return el.assignedSlot;
+    }
+    if (el.parentElement) {
+      return el.parentElement;
+    }
+    const parent = el.parentNode as (Node & { host?: Element }) | null;
+    return parent && parent.host ? parent.host : null;
+  }
+
+  /** A light-DOM child of an open shadow host that no `<slot>` takes is not rendered at all. */
+  function isUnslotted(el: Element): boolean {
+    const parent = el.parentElement;
+    return !!(parent && parent.shadowRoot && !el.assignedSlot);
+  }
+
+  /**
+   * `aria-hidden` or `display: none` on the element or an ancestor, or `visibility: hidden`.
+   * Ancestors are followed out of shadow trees and through slots, the way the page renders them.
+   */
   function isHidden(el: Element): boolean {
-    for (let node: Element | null = el; node; node = node.parentElement) {
+    for (let node: Element | null = el; node; node = renderedParent(node)) {
       let hidden = hiddenCache.get(node);
       if (hidden === undefined) {
         hidden =
-          node.getAttribute('aria-hidden') === 'true' || getComputedStyle(node).display === 'none';
+          node.getAttribute('aria-hidden') === 'true' ||
+          getComputedStyle(node).display === 'none' ||
+          isUnslotted(node);
         hiddenCache.set(node, hidden);
       }
       if (hidden) {
@@ -297,13 +323,31 @@ export function queryDom(root: Element | null, query: DomQuery): Element[] {
   }
 
   /**
-   * The name an element contributes from its content: text, plus children's labels and alts.
-   * `labelled` is the control a `<label>` is being read for: when the label wraps it, its own
-   * content (a select's options, a textarea's text) is not part of its name.
+   * The nodes the element renders as its content: a `<slot>`'s assigned nodes (or its fallback
+   * content), a shadow host's shadow tree, else its children.
+   */
+  function renderedChildren(el: Element): ArrayLike<Node> {
+    if (tagOf(el) === 'SLOT' && typeof (el as HTMLSlotElement).assignedNodes === 'function') {
+      const assigned = (el as HTMLSlotElement).assignedNodes({ flatten: true });
+      if (assigned.length > 0) {
+        return assigned;
+      }
+    }
+    return el.shadowRoot ? el.shadowRoot.childNodes : el.childNodes;
+  }
+
+  /**
+   * The name an element contributes from its content: text, plus children's labels and alts,
+   * read from the rendered tree, so `<ion-button>Save</ion-button>` names the `<button>` in its
+   * shadow tree through the `<slot>` there. `labelled` is the control a `<label>` is being read
+   * for: when the label wraps it, its own content (a select's options, a textarea's text) is not
+   * part of its name.
    */
   function contentName(el: Element, includeHidden: boolean, labelled?: Element): string {
     let out = '';
-    for (let child = el.firstChild; child; child = child.nextSibling) {
+    const children = renderedChildren(el);
+    for (let i = 0; i < children.length; i++) {
+      const child = children[i]!;
       if (child.nodeType === 3) {
         out += child.nodeValue || '';
         continue;
@@ -368,8 +412,11 @@ export function queryDom(root: Element | null, query: DomQuery): Element[] {
     if (labelledBy) {
       const parts: string[] = [];
       const ids = labelledBy.split(' ');
+      // An id refers to an element of the same tree: the shadow root's when `el` is in one.
+      const tree = el.getRootNode ? (el.getRootNode() as Document | ShadowRoot) : doc;
+      const lookup = typeof tree.getElementById === 'function' ? tree : doc;
       for (let i = 0; i < ids.length; i++) {
-        const target = doc.getElementById(ids[i]!);
+        const target = lookup.getElementById(ids[i]!);
         if (target) {
           // A label element is read even while hidden: hiding it is how pages label visually.
           parts.push(

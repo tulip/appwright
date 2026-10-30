@@ -178,6 +178,54 @@ describe('getByRole in a WebView', () => {
     expect(ids(byText('Shadow'))).toEqual(['inner']);
   });
 
+  describe('shadow trees', () => {
+    /** An Ionic-style button: the host's text is slotted into a `<button>` in its shadow tree. */
+    function ionButton(hostAttrs: string, label: string) {
+      return `<ion-button ${hostAttrs}>${label}</ion-button>`;
+    }
+    function upgrade(
+      id: string,
+      shadowHtml = '<button id="native"><span><slot></slot></span></button>',
+    ) {
+      const shadow = document.getElementById(id)!.attachShadow({ mode: 'open' });
+      shadow.innerHTML = shadowHtml;
+      return shadow;
+    }
+
+    test('a button is named by the text slotted into it', () => {
+      render(ionButton('id="save"', 'Save'));
+      upgrade('save');
+      expect(ids(byRole('button', { name: 'Save' }))).toEqual(['native']);
+    });
+
+    test('a slot with nothing assigned is named by its fallback content', () => {
+      render('<x-close id="close"></x-close>');
+      upgrade('close', '<button id="native"><slot>Close</slot></button>');
+      expect(ids(byRole('button', { name: 'Close' }))).toEqual(['native']);
+    });
+
+    test('a button inside a hidden host is hidden', () => {
+      render('<div style="display: none"><x-toolbar id="bar"></x-toolbar></div>');
+      upgrade('bar', '<button id="native">Save</button>');
+      expect(ids(byRole('button', { name: 'Save' }))).toEqual([]);
+    });
+
+    test('an element no slot takes is not rendered, so it is hidden', () => {
+      render('<x-card id="card"><button id="light">Unslotted</button></x-card>');
+      upgrade('card', '<p>no slot here</p>');
+      expect(ids(byRole('button', { name: 'Unslotted' }))).toEqual([]);
+    });
+
+    test('aria-labelledby resolves ids inside the same shadow tree', () => {
+      render('<x-field id="field"></x-field>');
+      upgrade(
+        'field',
+        '<span id="lbl">Station</span><input id="native" type="text" aria-labelledby="lbl">',
+      );
+      expect(ids(byRole('textbox', { name: 'Station' }))).toEqual(['native']);
+    });
+  });
+
   test('a hidden child does not contribute to the name', () => {
     render('<button id="b">Save<span style="display: none"> draft</span></button>');
     expect(ids(byRole('button', { name: 'Save' }))).toEqual(['b']);
