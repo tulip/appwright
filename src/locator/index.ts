@@ -17,8 +17,8 @@ import {
   TimeoutOptions,
   WebDriverErrors,
 } from '../types';
-import { NonRetryableError, RetryableError, TimeoutError } from '../types/errors';
-import { boxedStep, isNoSuchWindowError } from '../utils';
+import { RetryableError, TimeoutError } from '../types/errors';
+import { boxedStep, isInvalidSessionError, isNoSuchWindowError } from '../utils';
 import {
   LocatorQuery,
   nativeIdQuery,
@@ -362,7 +362,7 @@ export class Locator {
     const fn = condition.bind(this.webDriverClient);
     try {
       return await retry(
-        async () => {
+        async (bail) => {
           try {
             const result = await fn();
             if (result === false) {
@@ -370,17 +370,13 @@ export class Locator {
             }
             return result as Exclude<ReturnValue, boolean>;
           } catch (error) {
-            if (isNoSuchWindowError(error)) {
-              throw new NonRetryableError(
-                error instanceof Error ? error.message : String(error),
-                'NoSuchWindowError',
-              );
-            }
-            // No lookup succeeds on a session the driver has deleted: give up at once, so the
-            // WebView can re-attach after a renderer drop (see `RENDERER_DROP_ERROR` there)
-            // rather than after the whole timeout. Matched on the driver's error text.
-            if (error instanceof Error && error.message.includes('invalid session id')) {
-              throw new NonRetryableError(error.message, error.name);
+            // No lookup succeeds in a closed window or on a session the driver has deleted: give
+            // up at once, so the WebView can recover (see `recoverFromWindowClosure()` there)
+            // rather than after the whole timeout. The error goes out as the driver threw it:
+            // one marked `bail` would stop the WebView's own retry as well.
+            if (isNoSuchWindowError(error) || isInvalidSessionError(error)) {
+              bail(error as Error);
+              return undefined as Exclude<ReturnValue, boolean>;
             }
             throw error;
           }

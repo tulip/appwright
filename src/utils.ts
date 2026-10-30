@@ -196,6 +196,17 @@ export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/**
+ * Whether the driver rejected the command because the session behind the current context is
+ * gone. webdriver names its errors after their W3C code; the message is checked too, as it
+ * carries the same code whenever a proxy (Appium in front of chromedriver) rebuilt the error.
+ */
+export function isInvalidSessionError(error: unknown): boolean {
+  const code = 'invalid session id';
+  const name = (error as { name?: unknown } | null)?.name;
+  return (typeof name === 'string' && name.includes(code)) || errorMessage(error).includes(code);
+}
+
 /** Whether `url` contains `pattern`, or matches it when it is a RegExp. */
 export function urlMatches(url: string, pattern: string | RegExp): boolean {
   if (typeof pattern === 'string') {

@@ -21,7 +21,6 @@ import {
   TextOptions,
   WebPage,
 } from '../types';
-import { NonRetryableError, RetryableError } from '../types/errors';
 import {
   boxedStep,
   contextName,
@@ -29,6 +28,7 @@ import {
   displayUrl,
   errorMessage,
   escapeQuotes,
+  isInvalidSessionError,
   isNoSuchWindowError,
   urlMatches,
 } from '../utils';
@@ -37,8 +37,13 @@ import {
  * Appium names a browser's context after its DevTools socket, not its package, and every Chrome
  * channel serves `chrome_devtools_remote`: with a Custom Tab in front, the foreground package is
  * `com.android.chrome` and its context `WEBVIEW_chrome`. Only the packages Appium itself treats
- * as Chrome are listed. If Appium ever renames these contexts, discovery with Chrome in front
- * finds nothing again, and `attach()`'s timeout error lists the contexts it does report.
+ * as Chrome are listed.
+ *
+ * Discovery never binds a browser: a browser in front is usually a hand-off the app takes back,
+ * and a context bound mid-hand-off would outlive it. A browser is bound only by
+ * `attach({ context })`, and left again by the first `webView` call made once it is no longer in
+ * front. If Appium ever renames these contexts, a bound browser is no longer recognised as one
+ * and stays bound until the next `attach()`.
  */
 const ANDROID_BROWSER_CONTEXTS: Record<string, string> = {
   'com.android.chrome': 'WEBVIEW_chrome',
@@ -59,23 +64,19 @@ const FATAL_SESSION_ERRORS = [
   'ECONNREFUSED',
 ];
 
-/**
- * What chromedriver answers once a WebView's renderer has dropped its DevTools connection
- * ("session deleted as the browser has closed the connection"). On Android it reads like a dead
- * session, but only the chromedriver session behind the WEBVIEW context is gone: Appium's own
- * session still answers, and switching to NATIVE_APP and back makes Appium start a new
- * chromedriver. `isRendererDrop()` tells the two apart by asking Appium. Matched against the
- * error text, the only signal there is; if the wording changes, a renderer drop fails the test
- * as it did before this recovery existed.
- */
-const RENDERER_DROP_ERROR = 'invalid session id';
-
 const ATTACH_TIMEOUT_MS = 60_000;
 const ATTACH_POLL_INTERVAL_MS = 1_000;
 
 /** How long the WEBVIEW contexts have to stay unchanged for `settle` to count them as settled. */
 const CONTEXTS_SETTLE_WINDOW_MS = 5_000;
 const CONTEXTS_SETTLE_SAMPLE_MS = 1_000;
+
+/**
+ * What `attach()` bound, for `webView` calls to bind again after a step left the WebView (any
+ * native `device` call switches to NATIVE_APP) and after a renderer drop. `window` is recorded on
+ * Android only, where one context spans every page of a WebView or browser.
+ */
+type AttachedPage = { context: string; window?: string };
 
 /**
  * WebView class for interacting with WebView content in hybrid mobile apps.
@@ -91,19 +92,108 @@ const CONTEXTS_SETTLE_SAMPLE_MS = 1_000;
  * ```
  */
 export class WebView {
+  /** Set by `attach()`, cleared once discovery binds another context. */
+  private attached?: AttachedPage;
+
   constructor(private device: Device) {}
 
   /**
    * Ensures we're in WEBVIEW context before any operation.
-   * If not in a WEBVIEW context, discovers and switches to the first available one.
+   * If not in a WEBVIEW context, binds what `attach()` bound while it lasts, else discovers and
+   * switches to the first available one. A bound browser that is no longer in front is left the
+   * same way (see `ANDROID_BROWSER_CONTEXTS`).
    */
   private async ensureWebViewContext(): Promise<void> {
     const currentContext = await this.device.getCurrentContext();
     console.log('[WebView] Current context:', currentContext);
 
-    if (!currentContext.includes('WEBVIEW')) {
-      await this.switchToWebviewContext();
+    if (currentContext.includes('WEBVIEW')) {
+      if (!(await this.browserPageIsBehind(currentContext))) {
+        return;
+      }
+      // Telling whether the browser is still in front means leaving it for NATIVE_APP, so this
+      // binds it again (and the window `attach()` chose) when it is.
+      const bound =
+        this.attached?.context === currentContext ? this.attached : { context: currentContext };
+      const left = await this.switchToAttached(bound);
+      if (left == null) {
+        return;
+      }
+      console.log(`[WebView] Leaving ${currentContext}: ${left}.`);
+    } else if (this.attached != null) {
+      const gone = await this.switchToAttached(this.attached);
+      if (gone == null) {
+        return;
+      }
+      console.log(
+        `[WebView] Not returning to ${this.attached.context}, which attach() bound: ${gone}. ` +
+          'Discovering a WebView instead.',
+      );
     }
+    await this.switchToWebviewContext();
+  }
+
+  /**
+   * Whether `context` is a browser's and its page is not showing, so the browser may have left
+   * the front. Read from inside the page, which costs one script per `webView` call while a
+   * browser is bound; the foreground lookup that settles it has to leave the page. A page that
+   * cannot answer counts as not showing.
+   */
+  private async browserPageIsBehind(context: string): Promise<boolean> {
+    if (
+      this.device.getPlatform() != Platform.ANDROID ||
+      !Object.values(ANDROID_BROWSER_CONTEXTS).includes(context)
+    ) {
+      return false;
+    }
+    try {
+      return (await this.device.evaluate<string>('return document.visibilityState')) !== 'visible';
+    } catch {
+      return true;
+    }
+  }
+
+  /**
+   * Why `context`, a browser's, is no longer the one to drive — the app is in front again, having
+   * taken the hand-off back — or `undefined` when it still is or is no browser's. Reading the
+   * foreground package switches to NATIVE_APP.
+   */
+  private async browserLeftFront(context: string): Promise<string | undefined> {
+    if (
+      this.device.getPlatform() != Platform.ANDROID ||
+      !Object.values(ANDROID_BROWSER_CONTEXTS).includes(context)
+    ) {
+      return undefined;
+    }
+    const foreground = await this.device.getCurrentBundleId();
+    return ANDROID_BROWSER_CONTEXTS[foreground] === context
+      ? undefined
+      : `${foreground} is in front, not the browser`;
+  }
+
+  /**
+   * Switches to the context and window `attached` names, or says why it cannot: the browser left
+   * the front, Appium no longer lists the context, or the window closed. May leave the session in
+   * NATIVE_APP when it cannot.
+   */
+  private async switchToAttached(attached: AttachedPage): Promise<string | undefined> {
+    const left = await this.browserLeftFront(attached.context);
+    if (left != null) {
+      return left;
+    }
+    const listed = (await this.device.contexts()).map(contextName);
+    if (!listed.includes(attached.context)) {
+      return `Appium no longer lists it (contexts: ${JSON.stringify(listed)})`;
+    }
+    await this.device.switchContext(attached.context);
+    if (attached.window != null) {
+      const windows = await this.device.getWindowHandles();
+      if (!windows.includes(attached.window)) {
+        return `its window ${attached.window} is closed (windows: ${JSON.stringify(windows)})`;
+      }
+      await this.device.switchToWindow(attached.window);
+    }
+    return undefined;
   }
 
   /**
@@ -116,6 +206,12 @@ export class WebView {
    * Appium skips its own check for a dead page when asked for the context it is already in —
    * then retries until the page reports `document.readyState` `interactive` or `complete` and
    * `probeSelector`, if given, is in its DOM.
+   *
+   * Other `webView` calls never bind a browser on their own: a browser's page is driven only
+   * after `attach({ context })` names it. What `attach()` bound stays bound across native
+   * `device` calls, which switch to NATIVE_APP, for as long as its context (and on Android its
+   * window) lasts and, for a browser, while the browser stays in front. After that the next
+   * `webView` call logs why and discovers a WebView again.
    *
    * **Usage:**
    * ```js
@@ -142,6 +238,7 @@ export class WebView {
       throw new Error('attach: pass `page`, or `context` and `pageUrl`, not both.');
     }
     const deadline = Date.now() + timeout;
+    this.attached = undefined;
     if (settle) {
       await this.waitForContextsToSettle(deadline);
     }
@@ -156,7 +253,7 @@ export class WebView {
           page != null && devToolsPageId(page) != null ? await this.device.webPages() : undefined;
         const target = page?.context ?? context ?? (await this.findWebViewContext());
         if (!target) {
-          throw new Error('no WebView context is available yet');
+          throw new Error(`no WebView context is available yet${await this.browserHint()}`);
         }
         await this.device.switchContext(target);
         if (page != null && listed != null) {
@@ -178,11 +275,17 @@ export class WebView {
           }
         }
 
+        this.attached = {
+          context: target,
+          window:
+            this.device.getPlatform() == Platform.ANDROID ? await this.currentWindow() : undefined,
+        };
         console.log('[WebView] Attached to', target);
         return target;
       } catch (error) {
         if (
-          FATAL_SESSION_ERRORS.some((fatal) => errorMessage(error).includes(fatal)) &&
+          (isInvalidSessionError(error) ||
+            FATAL_SESSION_ERRORS.some((fatal) => errorMessage(error).includes(fatal))) &&
           !(await this.isRendererDrop(error))
         ) {
           throw error;
@@ -298,16 +401,28 @@ export class WebView {
     await this.device.switchToWindow(atUrl[0]!);
   }
 
+  /** The window the bound context is on, or `undefined` where windows cannot be read. */
+  private async currentWindow(): Promise<string | undefined> {
+    try {
+      return await this.device.getCurrentWindowHandle();
+    } catch {
+      return undefined;
+    }
+  }
+
   /**
    * Whether `error` is chromedriver's session dying with the page's renderer while Appium's
-   * session lives on (see `RENDERER_DROP_ERROR`). Android only: on iOS the WebView is driven by
-   * XCUITest itself, so "invalid session id" means the session is gone.
+   * session lives on.
+   *
+   * Once a WebView's renderer drops its DevTools connection, chromedriver answers "invalid
+   * session id: session deleted as the browser has closed the connection". On Android it reads
+   * like a dead session, but only the chromedriver session behind the WEBVIEW context is gone:
+   * Appium's own session still answers, and switching to NATIVE_APP and back makes Appium start
+   * a new chromedriver. This tells the two apart by asking Appium. Android only: on iOS the
+   * WebView is driven by XCUITest itself, so "invalid session id" means the session is gone.
    */
   private async isRendererDrop(error: unknown): Promise<boolean> {
-    if (
-      this.device.getPlatform() != Platform.ANDROID ||
-      !errorMessage(error).includes(RENDERER_DROP_ERROR)
-    ) {
+    if (this.device.getPlatform() != Platform.ANDROID || !isInvalidSessionError(error)) {
       return false;
     }
     try {
@@ -319,31 +434,56 @@ export class WebView {
   }
 
   /**
+   * Binds again, from NATIVE_APP, what was bound before a renderer drop: the context and window
+   * `attach()` bound, else whatever discovery finds. Throws when what `attach()` bound is gone,
+   * rather than run the action on another page.
+   */
+  private async rebind(): Promise<void> {
+    const attached = this.attached;
+    if (attached == null) {
+      await this.ensureWebViewContext();
+      return;
+    }
+    const gone = await this.switchToAttached(attached);
+    if (gone != null) {
+      throw new Error(
+        `The WebView renderer dropped its connection, and ${attached.context}, which attach() ` +
+          `bound, cannot be bound again: ${gone}. Call webView.attach() to bind the page to use now.`,
+      );
+    }
+  }
+
+  /**
    * Helper method to recover from window closure by resetting WebView context.
    * Uses async-retry to handle transient failures.
    *
-   * A renderer drop on Android (see `RENDERER_DROP_ERROR`) is recovered the same way: hopping
-   * through NATIVE_APP makes Appium replace the dead chromedriver session.
+   * A renderer drop on Android (see `isRendererDrop()`) is recovered the same way: hopping
+   * through NATIVE_APP makes Appium replace the dead chromedriver session. Every other error
+   * fails at once, rethrown as it was thrown so that its class (a locator's `TimeoutError`,
+   * which `expect(...).not.toBeVisible()` tells apart from a real failure) and stack survive.
    */
   private async recoverFromWindowClosure<T>(operation: () => Promise<T>): Promise<T> {
     return await retry(
-      async () => {
+      async (bail) => {
         try {
           return await operation();
         } catch (error) {
           if (await this.isRendererDrop(error)) {
             console.log('[WebView] The WebView renderer dropped its connection. Re-attaching...');
-            await this.device.switchContext('NATIVE_APP');
-            await this.ensureWebViewContext();
-            // The locator gave up on the dead session; this attempt may retry on the new one.
-            throw new RetryableError(errorMessage(error));
+            try {
+              await this.device.switchContext(NATIVE_CONTEXT);
+              await this.rebind();
+            } catch (rebindError) {
+              bail(rebindError as Error);
+              return undefined as T;
+            }
+            // The locator gave up on the dead session; the next attempt runs on the new one.
+            throw error;
           }
           if (!isNoSuchWindowError(error)) {
             // We don't want to retry all errors. Only those related to window closure
-            throw new NonRetryableError(
-              error instanceof Error ? error.message : String(error),
-              error instanceof Error ? error.name : undefined,
-            );
+            bail(error as Error);
+            return undefined as T;
           }
 
           console.log('[WebView] Window closed error detected. Reconnecting...');
@@ -361,7 +501,7 @@ export class WebView {
             console.log('[WebView] Could not get active window handles');
           }
 
-          await this.device.switchContext('NATIVE_APP');
+          await this.device.switchContext(NATIVE_CONTEXT);
           console.log('[WebView] Switched to NATIVE_APP');
 
           await this.ensureWebViewContext();
@@ -612,23 +752,26 @@ export class WebView {
    * });
    * ```
    *
+   * Recovers the way locator actions do: after a closed window or an Android renderer drop,
+   * the WebView is bound again and the script runs once more, so a script that may have run
+   * before the failure should be safe to run twice.
+   *
    * @param script - JavaScript code to execute (string or function)
    * @returns Result of the script execution
    */
   @boxedStep
   async evaluate<T = any>(script: string | Function): Promise<T> {
     await this.ensureWebViewContext();
-    return await this.device.evaluate<T>(script);
+    return await this.recoverFromWindowClosure(() => this.device.evaluate<T>(script));
   }
 
   /**
    * The WEBVIEW context to bind, or `undefined` while there is none.
    *
    * On Android the chromedriver behind Appium sees every debuggable WebView on the device — the
-   * system browser, background apps, widgets — so only those of the app in the foreground count.
-   * A browser in front is matched through `ANDROID_BROWSER_CONTEXTS`, since its context is named
-   * after its DevTools socket rather than its package. XCUITest lists the app's own WebViews
-   * only, so iOS takes the first one.
+   * system browser, background apps, widgets — so only those of the app in the foreground count,
+   * and a browser in front is never bound this way (see `ANDROID_BROWSER_CONTEXTS`). XCUITest
+   * lists the app's own WebViews only, so iOS takes the first one.
    */
   private async findWebViewContext(): Promise<string | undefined> {
     const foreground =
@@ -638,10 +781,7 @@ export class WebView {
     const webViews = (await this.device.contexts())
       .map(contextName)
       .filter((name) => name.includes('WEBVIEW'));
-    const contexts = webViews.filter(
-      (name) =>
-        !foreground || name.includes(foreground) || name === ANDROID_BROWSER_CONTEXTS[foreground],
-    );
+    const contexts = webViews.filter((name) => !foreground || name.includes(foreground));
     console.log('[WebView] Available contexts from Appium:', contexts);
     const skipped = webViews.filter((name) => !contexts.includes(name));
     if (skipped.length > 0) {
@@ -649,15 +789,42 @@ export class WebView {
         `[WebView] Skipping ${skipped.join(', ')}: not ${foreground}'s, the app in front.`,
       );
     }
+    const browser = foreground != null ? ANDROID_BROWSER_CONTEXTS[foreground] : undefined;
+    if (browser != null && contexts.length === 0) {
+      console.log(
+        `[WebView] ${foreground} is in front; a browser is bound only by ` +
+          `webView.attach({ context: '${browser}' }).`,
+      );
+    }
     return contexts[0];
   }
 
+  /** How to bind the browser in front, for an error that found no WebView; '' otherwise. */
+  private async browserHint(): Promise<string> {
+    if (this.device.getPlatform() != Platform.ANDROID) {
+      return '';
+    }
+    try {
+      const foreground = await this.device.getCurrentBundleId();
+      const browser = ANDROID_BROWSER_CONTEXTS[foreground];
+      return browser != null
+        ? `. ${foreground} is in front: bind its page with webView.attach({ context: '${browser}' })`
+        : '';
+    } catch {
+      return '';
+    }
+  }
+
   private async switchToWebviewContext(): Promise<void> {
+    this.attached = undefined;
     await retry(
       async () => {
         const webviewContext = await this.findWebViewContext();
         if (!webviewContext) {
-          throw new Error('No WebView context found. Make sure your app has a WebView loaded.');
+          throw new Error(
+            `No WebView context found. Make sure your app has a WebView loaded` +
+              `${await this.browserHint()}.`,
+          );
         }
 
         console.log('[WebView] Switching to context:', webviewContext);
