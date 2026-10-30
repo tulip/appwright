@@ -1526,6 +1526,15 @@ export class Device {
   }
 
   /**
+   * Runs `script` in the current context without a report step, for appwright's own checks
+   * between the steps a test takes.
+   * @internal
+   */
+  async runScript<T = any>(script: string): Promise<T> {
+    return await this.webDriverClient.executeScript(script, []);
+  }
+
+  /**
    * The native view hierarchy as XML — UiAutomator2's dump on Android, XCUITest's on iOS — for
    * finding the attributes a locator can match on. Read from NATIVE_APP whatever context is
    * active, then switched back, so a call between two `webView` steps leaves the WebView bound.

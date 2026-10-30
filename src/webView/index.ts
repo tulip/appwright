@@ -72,9 +72,17 @@ const CONTEXTS_SETTLE_WINDOW_MS = 5_000;
 const CONTEXTS_SETTLE_SAMPLE_MS = 1_000;
 
 /**
+ * How long discovery keeps retrying while a browser is in front before it fails with the hint to
+ * `attach({ context })`: long enough for a closing Custom Tab to hand the front back to the app.
+ */
+const BROWSER_IN_FRONT_GRACE_MS = 5_000;
+
+/**
  * What `attach()` bound, for `webView` calls to bind again after a step left the WebView (any
- * native `device` call switches to NATIVE_APP) and after a renderer drop. `window` is recorded on
- * Android only, where one context spans every page of a WebView or browser.
+ * native `device` call switches to NATIVE_APP), after a renderer drop and after a closed window.
+ * `window` is recorded on Android only, where one context spans every page of a WebView or
+ * browser, and only when `page` or `pageUrl` chose it: a window `attach()` merely landed on is
+ * not pinned, so a WebView the app rebuilt under a new window is still found.
  */
 type AttachedPage = { context: string; window?: string };
 
@@ -147,37 +155,41 @@ export class WebView {
       return false;
     }
     try {
-      return (await this.device.evaluate<string>('return document.visibilityState')) !== 'visible';
+      return (await this.device.runScript<string>('return document.visibilityState')) !== 'visible';
     } catch {
       return true;
     }
   }
 
   /**
-   * Why `context`, a browser's, is no longer the one to drive — the app is in front again, having
-   * taken the hand-off back — or `undefined` when it still is or is no browser's. Reading the
-   * foreground package switches to NATIVE_APP.
+   * Why `context` is no longer the one to drive because its app or browser has left the front —
+   * the app took a hand-off back, or another app came up — or `undefined` while it is still in
+   * front. Android only, matching names as discovery does: a browser's context through
+   * `ANDROID_BROWSER_CONTEXTS`, an app's by its package. XCUITest lists the app's own WebViews
+   * only, so iOS never asks. Reading the foreground package switches to NATIVE_APP.
    */
-  private async browserLeftFront(context: string): Promise<string | undefined> {
-    if (
-      this.device.getPlatform() != Platform.ANDROID ||
-      !Object.values(ANDROID_BROWSER_CONTEXTS).includes(context)
-    ) {
+  private async leftFront(context: string): Promise<string | undefined> {
+    if (this.device.getPlatform() != Platform.ANDROID) {
       return undefined;
     }
     const foreground = await this.device.getCurrentBundleId();
-    return ANDROID_BROWSER_CONTEXTS[foreground] === context
-      ? undefined
-      : `${foreground} is in front, not the browser`;
+    const isBrowser = Object.values(ANDROID_BROWSER_CONTEXTS).includes(context);
+    if (
+      isBrowser ? ANDROID_BROWSER_CONTEXTS[foreground] === context : context.includes(foreground)
+    ) {
+      return undefined;
+    }
+    return `${foreground} is in front, not ${isBrowser ? 'the browser' : 'the app it belongs to'}`;
   }
 
   /**
-   * Switches to the context and window `attached` names, or says why it cannot: the browser left
-   * the front, Appium no longer lists the context, or the window closed. May leave the session in
-   * NATIVE_APP when it cannot.
+   * Switches to the context and window `attached` names, or says why it cannot: its app or
+   * browser left the front, Appium no longer lists the context, or the window closed. When it
+   * cannot, the session is left in NATIVE_APP, so the next `webView` call discovers a WebView
+   * rather than run in whatever window the context fell back to.
    */
   private async switchToAttached(attached: AttachedPage): Promise<string | undefined> {
-    const left = await this.browserLeftFront(attached.context);
+    const left = await this.leftFront(attached.context);
     if (left != null) {
       return left;
     }
@@ -189,6 +201,7 @@ export class WebView {
     if (attached.window != null) {
       const windows = await this.device.getWindowHandles();
       if (!windows.includes(attached.window)) {
+        await this.device.switchContext(NATIVE_CONTEXT);
         return `its window ${attached.window} is closed (windows: ${JSON.stringify(windows)})`;
       }
       await this.device.switchToWindow(attached.window);
@@ -275,10 +288,13 @@ export class WebView {
           }
         }
 
+        const choseWindow = page != null || pageUrl != null;
         this.attached = {
           context: target,
           window:
-            this.device.getPlatform() == Platform.ANDROID ? await this.currentWindow() : undefined,
+            choseWindow && this.device.getPlatform() == Platform.ANDROID
+              ? await this.currentWindow()
+              : undefined,
         };
         console.log('[WebView] Attached to', target);
         return target;
@@ -434,11 +450,12 @@ export class WebView {
   }
 
   /**
-   * Binds again, from NATIVE_APP, what was bound before a renderer drop: the context and window
-   * `attach()` bound, else whatever discovery finds. Throws when what `attach()` bound is gone,
-   * rather than run the action on another page.
+   * Binds again, from NATIVE_APP, what was bound before a renderer drop or a closed window: the
+   * context and window `attach()` bound, else whatever discovery finds. Throws, after forgetting
+   * the attached page, when what `attach()` bound is gone, rather than run the action on another
+   * page. `cause` opens the error.
    */
-  private async rebind(): Promise<void> {
+  private async rebind(cause: string): Promise<void> {
     const attached = this.attached;
     if (attached == null) {
       await this.ensureWebViewContext();
@@ -446,9 +463,10 @@ export class WebView {
     }
     const gone = await this.switchToAttached(attached);
     if (gone != null) {
+      this.attached = undefined;
       throw new Error(
-        `The WebView renderer dropped its connection, and ${attached.context}, which attach() ` +
-          `bound, cannot be bound again: ${gone}. Call webView.attach() to bind the page to use now.`,
+        `${cause}, and ${attached.context}, which attach() bound, cannot be bound again: ` +
+          `${gone}. Call webView.attach() to bind the page to use now.`,
       );
     }
   }
@@ -472,7 +490,7 @@ export class WebView {
             console.log('[WebView] The WebView renderer dropped its connection. Re-attaching...');
             try {
               await this.device.switchContext(NATIVE_CONTEXT);
-              await this.rebind();
+              await this.rebind('The WebView renderer dropped its connection');
             } catch (rebindError) {
               bail(rebindError as Error);
               return undefined as T;
@@ -501,11 +519,15 @@ export class WebView {
             console.log('[WebView] Could not get active window handles');
           }
 
-          await this.device.switchContext(NATIVE_CONTEXT);
-          console.log('[WebView] Switched to NATIVE_APP');
-
-          await this.ensureWebViewContext();
-          console.log('[WebView] Re-established WebView context');
+          try {
+            await this.device.switchContext(NATIVE_CONTEXT);
+            console.log('[WebView] Switched to NATIVE_APP');
+            await this.rebind('The window the WebView was on closed');
+            console.log('[WebView] Re-established WebView context');
+          } catch (rebindError) {
+            bail(rebindError as Error);
+            return undefined as T;
+          }
 
           throw error;
         }
@@ -815,16 +837,26 @@ export class WebView {
     }
   }
 
+  /**
+   * Discovers a WebView and binds it, retrying for about half a minute while there is none — or
+   * for `BROWSER_IN_FRONT_GRACE_MS` while a browser is in front, which discovery never binds.
+   */
   private async switchToWebviewContext(): Promise<void> {
     this.attached = undefined;
+    const started = Date.now();
     await retry(
-      async () => {
+      async (bail) => {
         const webviewContext = await this.findWebViewContext();
         if (!webviewContext) {
-          throw new Error(
-            `No WebView context found. Make sure your app has a WebView loaded` +
-              `${await this.browserHint()}.`,
+          const hint = await this.browserHint();
+          const error = new Error(
+            `No WebView context found. Make sure your app has a WebView loaded${hint}.`,
           );
+          if (hint !== '' && Date.now() - started >= BROWSER_IN_FRONT_GRACE_MS) {
+            bail(error);
+            return;
+          }
+          throw error;
         }
 
         console.log('[WebView] Switching to context:', webviewContext);
