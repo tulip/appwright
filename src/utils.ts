@@ -17,13 +17,43 @@ function hasSecretOption(args: unknown[]): boolean {
   );
 }
 
+/** A `WebPage` from `device.webPages()`: it carries its URL, which the title should not. */
+function isWebPage(value: unknown): value is { key: string; url: string } {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof (value as { key?: unknown }).key === 'string' &&
+    typeof (value as { url?: unknown }).url === 'string'
+  );
+}
+
 function formatStepArgs(args: unknown[]): string {
   if (!args.length) {
     return '';
   }
   const mask = hasSecretOption(args);
-  const formatted = args.map((a) => (mask && typeof a === 'string' ? '"***"' : JSON.stringify(a)));
+  // A page reads as its key: its URL can carry a sign-in code or token in the query or fragment.
+  const replacer = (_key: string, value: unknown) =>
+    isWebPage(value) ? `page ${value.key}` : value;
+  const formatted = args.map((a) =>
+    mask && typeof a === 'string' ? '"***"' : JSON.stringify(a, replacer),
+  );
   return '(' + formatted.join(' , ') + ')';
+}
+
+/**
+ * A page URL for errors and logs, without its query and fragment: after a sign-in hand-off they
+ * can carry an authorization code or access token, and errors reach the HTML report and the
+ * cloud providers' dashboards. What was dropped is marked with `?…` / `#…`.
+ */
+export function displayUrl(url: string): string {
+  const cut = url.search(/[?#]/);
+  if (cut === -1) {
+    return url;
+  }
+  const query = url.indexOf('?') !== -1 ? '?…' : '';
+  const fragment = url.indexOf('#') !== -1 ? '#…' : '';
+  return url.slice(0, cut) + query + fragment;
 }
 
 function isInsideTest(): boolean {
@@ -38,11 +68,16 @@ function isInsideTest(): boolean {
 export function boxedStep(target: Function, context: ClassMethodDecoratorContext) {
   return function replacementMethod(
     this: {
-      selector: string | RegExp;
+      selector?: string | RegExp;
+      description?: string;
     },
     ...args: any
   ) {
-    const path = this.selector ? `("${this.selector}")` : '';
+    const path = this.description
+      ? `(${this.description})`
+      : this.selector
+      ? `("${this.selector}")`
+      : '';
     const argsString = formatStepArgs(Array.from(args));
     const name = `${context.name as string}${path}${argsString}`;
     if (!isInsideTest()) {
@@ -146,4 +181,48 @@ export function isNoSuchWindowError(error: unknown): boolean {
   }
   const errorString = String(error).toLowerCase();
   return errorString.includes('no such window') || errorString.includes('nosuchwindowerror');
+}
+
+/**
+ * The name to switch to for a context Appium reported. Appium returns plain names unless the
+ * session asked for the full context list, whose entries are objects named by `id` (their `title`
+ * is the page's title).
+ */
+export function contextName(context: string | { id: string }): string {
+  return typeof context === 'string' ? context : context.id;
+}
+
+export function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Whether the driver rejected the command because the session behind the current context is
+ * gone. webdriver names its errors after their W3C code; the message is checked too, as it
+ * carries the same code whenever a proxy (Appium in front of chromedriver) rebuilt the error.
+ * A page script's own error (`javascript error`) never counts, whatever its text says: a page
+ * that throws "invalid session id" from its backend must not have its script run again.
+ */
+export function isInvalidSessionError(error: unknown): boolean {
+  const code = 'invalid session id';
+  const scriptError = 'javascript error';
+  const name = (error as { name?: unknown } | null)?.name;
+  if (typeof name === 'string' && name.includes(code)) {
+    return true;
+  }
+  const message = errorMessage(error);
+  if ((typeof name === 'string' && name.includes(scriptError)) || message.startsWith(scriptError)) {
+    return false;
+  }
+  return message.includes(code);
+}
+
+/** Whether `url` contains `pattern`, or matches it when it is a RegExp. */
+export function urlMatches(url: string, pattern: string | RegExp): boolean {
+  if (typeof pattern === 'string') {
+    return url.includes(pattern);
+  }
+  // A `g`/`y` RegExp resumes from where its previous test() matched.
+  pattern.lastIndex = 0;
+  return pattern.test(url);
 }

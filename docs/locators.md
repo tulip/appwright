@@ -40,6 +40,12 @@ Above method defaults to an exact match, and this can be overridden by setting t
 const element = await device.getById('signup', { exact: false });
 ```
 
+Pass `editable: true` to restrict the match to text fields, as `getByLabel` does. An id is not always unique to the field: an Android system dialog can give the file-name field and its title the same resource id.
+
+```ts
+await device.getById('android:id/title', { editable: true }).fill('report.pdf');
+```
+
 ### Get an element by accessibility label
 
 You can use the `getByLabel` method to select elements by their accessibility label (`content-desc` on Android, `label` on iOS). React Native's `accessibilityLabel` lands here on both platforms. Neither `getByText` (which reads the `text` attribute on Android) nor `getById` can find an element that only carries a label.
@@ -63,6 +69,24 @@ You can use the `getByXpath` method to select elements by their XPath on the scr
 ```ts
 const element = await device.getByXpath(`//android.widget.Button[@text="Confirm"]`);
 ```
+
+### Get an element by a platform selector
+
+For a match the methods above cannot express, pass the driver's own selector language. The attribute names are the ones `device.getPageSource()` shows.
+
+```ts
+// iOS: an NSPredicate over name, label, value, type, …
+await device.getByIosPredicate('type == "XCUIElementTypeSwitch" AND value == "1"').tap();
+
+// Android: a UiSelector expression
+await device
+  .getByAndroidUiAutomator(
+    'new UiSelector().resourceId("android:id/button1").className("android.widget.Button")',
+  )
+  .tap();
+```
+
+Each one fails at the first lookup on the other platform, which has no such strategy.
 
 ## How to Take Actions on the Element
 
@@ -129,6 +153,17 @@ To extract text from an element, you can use the `getText` method.
 const text = await device.getByText('Playwright').getText();
 ```
 
+### Measuring an element
+
+`boundingBox` returns the element's `{ x, y, width, height }`, or `null` when it is hidden, as Playwright's does. It waits for something to match (and throws, saying the element is not found, if nothing does within the timeout), then measures the displayed match without waiting for one to show. A native element's rectangle is in the driver's units — points on iOS, physical pixels on Android, the units of `device.getWindowRect()` and `device.drag()` — and a WebView element's is in the page's CSS pixels, relative to the document.
+
+```ts
+const window = await device.getWindowRect();
+const box = await device.getByText('Welcome', { exact: true }).boundingBox();
+expect(box).not.toBeNull();
+expect(box!.x + box!.width).toBeLessThanOrEqual(window.width);
+```
+
 ## Check for visibility of an element
 
 To check if an element is visible on the screen, you can use the `isVisible` method.
@@ -137,13 +172,19 @@ To check if an element is visible on the screen, you can use the `isVisible` met
 const isVisible = await device.getByText('Playwright').isVisible();
 ```
 
-To block until an element reaches a state, use `waitFor` with `'attached'`, `'visible'` or `'hidden'`. `'hidden'` is satisfied when nothing matches or the match is not displayed; a stale element is retried rather than counted as gone.
+To block until an element reaches a state, use `waitFor` with `'attached'`, `'visible'` or `'hidden'`. `'hidden'` is satisfied when nothing matches or no match is displayed; a stale element is retried rather than counted as gone. `'visible'`, and every action, take the last _displayed_ match, so a hidden duplicate later in the page (a closed menu, an off-screen copy) does not stand in for the one on screen.
 
 ```ts
 await device.getByText('Loading…').waitFor('hidden');
 ```
 
 `expect(locator).not.toBeVisible()` uses the same wait, so it returns as soon as the element is gone rather than after the full timeout.
+
+These waits, and every action that waits for its element, take `{ timeout }` in milliseconds and default to the project's `expectTimeout`. `{ timeout: 0 }` makes a single attempt, for a quick check that something is not there; Playwright reads `0` as no timeout instead.
+
+```ts
+const hasSecondPage = await webView.getByText('Page 2').isVisible({ timeout: 0 });
+```
 
 ## Scroll screen
 
@@ -168,17 +209,47 @@ await webView.getByTestId('username-input').fill('admin');
 
 ### Get an element by Text
 
-Select elements by their visible text content.
+Select elements by their text the way Playwright's `getByText` does: the element whose whitespace-normalised text matches while none of its children's does. `<li><b>Device</b></li>` yields the `<b>`, not the `<li>` and every ancestor up to `<body>`. Text in `<script>`, `<style>` and `<head>` (so the page title) never matches, and an `<input type="submit">` matches by its value. Both `getByText` and `getByRole` also search open shadow roots, as Playwright does; closed ones cannot be read from the page.
 
 ```ts
 await webView.getByText('Welcome').tap();
 await webView.getByText('Submit', { exact: true }).tap();
 ```
 
-You can also use RegExp patterns:
+The default is a substring match; `exact: true` compares the whole text. Unlike Playwright, the match is case-sensitive, as it is for `device.getByText`. A RegExp is tested against the normalised text, so it covers everything else:
 
 ```ts
-await webView.getByText(/Welcome.*/);
+await expect(webView.getByText(/^User \d+$/)).toBeVisible();
+await webView.getByText(/^log out$/i).tap();
+```
+
+### Get an element by Role
+
+Select elements by ARIA role and accessible name, the way Playwright's `getByRole` does. The role is the element's `role` attribute or its implicit HTML one: `<button>` and `<input type="submit">` are buttons, `<h1>`–`<h6>` headings, `<a href>` a link, `<input type="checkbox">` a checkbox, and so on. `menu` and `menuitem` come from the `role` attribute alone. Elements hidden from assistive technology (`aria-hidden="true"`, `display: none`, `visibility: hidden`) are skipped.
+
+```ts
+await webView.getByRole('button', { name: 'Menu' }).tap();
+await expect(webView.getByRole('heading', { name: 'Device Settings', level: 2 })).toBeVisible();
+```
+
+`name` is the accessible name, taken from the first of `aria-labelledby`, `aria-label`, an associated `<label>`, `alt` (or an input button's `value`), the text content (for roles named by their content, such as buttons, links, headings, menu items, tabs and cells), `title` and `placeholder`. An icon button is named by its `aria-label`. The name is matched whole by default, as `getByLabel` is; pass `exact: false` for a substring, or a RegExp.
+
+### Chaining locators
+
+`getByText`, `getByRole`, `getByLabel` and `getByTestId` can also be called on a locator, to look inside its element. Use them to scope a match to one part of the page instead of writing an XPath:
+
+```ts
+const menu = webView.getByTestId('main-menu');
+await menu.getByRole('button', { name: 'Settings' }).tap();
+await expect(webView.getByRole('menu').getByText('Device', { exact: true })).toBeVisible();
+```
+
+The child is looked up inside the element its parent resolves to (the one `tap()` would act on) and, when that has no match, inside the parent's other matches. Visibility waits and actions go on through the parent's other matches while the child's matches so far are all hidden, so a closed copy of a menu later in the page does not hide the open one's item. Errors name the whole chain, such as `[data-testid="main-menu"] >> getByRole("button", { name: "Settings" })`.
+
+Native locators chain too, with `device` semantics: `getByText` and `getByLabel` as on `device`, and `getByTestId` matching the accessibility identifier `device.getById` reads. `getByRole` throws there, since native views have no ARIA roles.
+
+```ts
+await device.getById('print-dialog').getByText('Save', { exact: true }).tap();
 ```
 
 ### Get an element by CSS Selector
@@ -238,4 +309,34 @@ const color = await webView.evaluate(() => {
 });
 ```
 
-**Note:** Currently supports apps with a single WebView only.
+### Attaching to a page
+
+`webView` binds a WEBVIEW context the first time it is used and then only checks that _some_ WEBVIEW context is current, which stays true after the page behind it is gone: the app reloaded or rebuilt its WebView, relaunched, or handed off to a browser. Call `webView.attach()` at those points to bind a live page again. It hops to `NATIVE_APP` and back on every attempt (Appium skips its own dead-page check when asked for the context it is already in) and retries until the page's `document.readyState` is `interactive` or `complete` and `probeSelector`, if given, is in its DOM. It returns the context it bound.
+
+What `attach()` bound stays bound: native `device` calls switch to `NATIVE_APP`, and the next `webView` call returns to the same context and, when `page` or `pageUrl` chose it, the same Android window. Once that context is gone, its app or browser is no longer in front, or its window has closed, the next call logs why and discovers a WebView again. Discovery never binds a browser: with Chrome in front it fails within a few seconds, saying to call `attach({ context: 'WEBVIEW_chrome' })`, and a bound browser is left once the app is back in front.
+
+On Android, a WebView's renderer can drop its DevTools connection mid-test, and chromedriver then answers every command with `invalid session id` although Appium's session is fine. `webView` locator actions, `evaluate()` and `attach()` recover from that by hopping to `NATIVE_APP` and back, which makes Appium start a new chromedriver session, then bind again what was bound and retry. A window that closed under an action is recovered the same way. If the window `attach()` chose is gone, they fail saying so rather than act on another page; call `attach()` again to bind the page to use now. When Appium's own session is gone too, or on iOS, where the error always means the session is gone, they fail at once. A script `evaluate()` ran may run again after a recovery, so keep it safe to repeat.
+
+```ts
+// The app reloaded behind a login: wait for the new page's login field.
+await webView.attach({ probeSelector: '[data-testid="login-field"]' });
+
+// A Chrome Custom Tab is in front: drive the sign-in page in it.
+await webView.attach({ context: 'WEBVIEW_chrome', pageUrl: '/oauth2/authorize' });
+
+// The page a step opened, as device.waitForWebPage() returned it.
+await webView.attach({ page: popup });
+```
+
+| Option          | Default  | What it does                                                                                                                                                                                      |
+| --------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `context`       | —        | Bind this context by name. Without it, the WebView of the app in the foreground is bound; a browser (`WEBVIEW_chrome`) is bound only when named here.                                             |
+| `pageUrl`       | —        | A string the page URL contains, or a RegExp it matches. A browser context spans every open tab, and chromedriver otherwise lands on whichever Chrome lists first.                                 |
+| `page`          | —        | A page from `device.webPages()` or `waitForWebPage()`, in place of `context` and `pageUrl`. Android picks its window by DevTools id, but Chrome numbers tabs: there, the window at the tab's URL. |
+| `probeSelector` | —        | A CSS selector that must be in the DOM.                                                                                                                                                           |
+| `timeout`       | `60_000` | How long to keep trying, in milliseconds.                                                                                                                                                         |
+| `settle`        | `false`  | First wait until the set of WEBVIEW contexts has not changed for 5 s. On iOS a relaunch replaces `WEBVIEW_<pid>.1` with `.2`, and a script sent to the outgoing page holds the session for 120 s. |
+
+`device.getWindowHandles()`, `device.switchToWindow(handle)` and `device.getUrl()` are the window commands `pageUrl` and `page` are built on, for picking a tab by other means.
+
+**Note:** Discovery binds a single WebView. To drive another, attach to it with `context` and `pageUrl`, or with `page`.

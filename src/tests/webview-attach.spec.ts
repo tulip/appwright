@@ -1,0 +1,734 @@
+import { afterEach, describe, expect, Mock, test, vi } from 'vitest';
+//@ts-ignore
+import { Client as WebDriverClient } from 'webdriver';
+
+import { Device } from '../device';
+import { TimeoutError } from '../types/errors';
+import { displayUrl, urlMatches } from '../utils';
+import { WebView } from '../webView';
+
+type MockClient = WebDriverClient & Record<string, Mock>;
+
+const APP = 'com.example.app';
+
+type PageState = { readyState?: string; probe?: boolean };
+
+/**
+ * A session whose current context follows `switchAppiumContext`, with `pages` of window handle
+ * -> URL, and a page script answering readyState / the probe from `page`.
+ */
+function mockClient({
+  isAndroid = true,
+  contexts = ['NATIVE_APP', `WEBVIEW_${APP}`],
+  foreground = APP,
+  pages = { 'CDwindow-1': 'https://example.com/' } as Record<string, string>,
+  page = (): PageState => ({ readyState: 'complete', probe: true }),
+  devTools = (): unknown => [],
+}: {
+  isAndroid?: boolean;
+  contexts?: unknown[] | (() => unknown[]);
+  foreground?: string;
+  pages?: Record<string, string>;
+  page?: () => PageState;
+  /** What `mobile: getContexts` answers. */
+  devTools?: () => unknown;
+} = {}): MockClient {
+  let current = 'NATIVE_APP';
+  let window = Object.keys(pages)[0];
+  //@ts-ignore partial mock
+  return {
+    isAndroid,
+    getAppiumContext: vi.fn(async () => current),
+    switchAppiumContext: vi.fn(async (name: string) => {
+      current = name;
+    }),
+    getAppiumContexts: vi.fn(async () => (typeof contexts === 'function' ? contexts() : contexts)),
+    getWindowHandles: vi.fn(async () => Object.keys(pages)),
+    getWindowHandle: vi.fn(async () => window),
+    switchToWindow: vi.fn(async (handle: string) => {
+      window = handle;
+    }),
+    getUrl: vi.fn(async () => pages[window!]),
+    executeScript: vi.fn(async (script: string) => {
+      if (script === 'mobile: getCurrentPackage') {
+        return foreground;
+      }
+      if (script === 'mobile: getContexts') {
+        return devTools();
+      }
+      if (script.includes('readyState')) {
+        return page().readyState;
+      }
+      if (script.includes('querySelector')) {
+        return page().probe;
+      }
+      return undefined;
+    }),
+  } as MockClient;
+}
+
+function webView(client: WebDriverClient): WebView {
+  return new WebView(new Device(client, APP, { expectTimeout: 1_000 }, 'emulator'));
+}
+
+const switches = (client: MockClient) =>
+  (client.switchAppiumContext as Mock).mock.calls.map((c) => c[0]);
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+describe('webView.attach', () => {
+  test("hops to NATIVE_APP, binds the foreground app's WebView, checks the page", async () => {
+    const client = mockClient();
+    expect(await webView(client).attach()).toBe(`WEBVIEW_${APP}`);
+    expect(switches(client)).toEqual(['NATIVE_APP', `WEBVIEW_${APP}`]);
+  });
+
+  test('hops through NATIVE_APP even when the named context is already current', async () => {
+    const client = mockClient({ contexts: ['NATIVE_APP', 'WEBVIEW_chrome'] });
+    await client.switchAppiumContext('WEBVIEW_chrome');
+    (client.switchAppiumContext as Mock).mockClear();
+
+    await webView(client).attach({ context: 'WEBVIEW_chrome' });
+    expect(switches(client)).toEqual(['NATIVE_APP', 'WEBVIEW_chrome']);
+  });
+
+  test('picks the page whose URL matches, by substring or RegExp', async () => {
+    const pages = {
+      'CDwindow-1': 'chrome-native://newtab/',
+      'CDwindow-2': 'https://sso.example.com/open-app?x=1',
+    };
+    const client = mockClient({ contexts: ['NATIVE_APP', 'WEBVIEW_chrome'], pages });
+    await webView(client).attach({ context: 'WEBVIEW_chrome', pageUrl: '/open-app' });
+    expect((client.switchToWindow as Mock).mock.calls.map((c) => c[0])).toEqual([
+      'CDwindow-1',
+      'CDwindow-2',
+    ]);
+
+    const again = mockClient({ contexts: ['NATIVE_APP', 'WEBVIEW_chrome'], pages });
+    await webView(again).attach({ context: 'WEBVIEW_chrome', pageUrl: /sso\.example\.com/g });
+    expect(again.switchToWindow).toHaveBeenLastCalledWith('CDwindow-2');
+  });
+
+  describe('page', () => {
+    const MAIN_URL = 'https://app.example.com/main';
+    const APP_CONTEXT = `WEBVIEW_${APP}`;
+    const REBUILT = { context: APP_CONTEXT, key: `${APP_CONTEXT}#B2`, url: MAIN_URL, title: '' };
+    /** UiAutomator2's `mobile: getContexts`: one WebView or browser, its DevTools pages nested. */
+    const listing =
+      (webviewName: string, ...pages: { id: string; url: string }[]) =>
+      (): unknown =>
+        [{ webviewName, pages: pages.map((p) => ({ type: 'page', title: '', ...p })) }];
+    const windows = (client: MockClient) =>
+      (client.switchToWindow as Mock).mock.calls.map((c) => c[0]);
+
+    test('WebView: picks its window by DevTools id among pages at the same URL', async () => {
+      const devTools = listing(
+        APP_CONTEXT,
+        { id: 'A1', url: MAIN_URL },
+        { id: 'B2', url: MAIN_URL },
+      );
+      const client = mockClient({ pages: { A1: MAIN_URL, B2: MAIN_URL }, devTools });
+      expect(await webView(client).attach({ page: REBUILT })).toBe(APP_CONTEXT);
+      expect(switches(client)).toEqual(['NATIVE_APP', APP_CONTEXT]);
+      expect(windows(client)).toEqual(['B2']);
+
+      const older = mockClient({
+        pages: { 'CDwindow-A1': MAIN_URL, 'CDwindow-B2': MAIN_URL },
+        devTools,
+      });
+      await webView(older).attach({ page: REBUILT });
+      expect(windows(older)).toEqual(['CDwindow-B2']);
+    });
+
+    test('WebView: keeps trying while chromedriver lists only the other page', async () => {
+      const devTools = listing(
+        APP_CONTEXT,
+        { id: 'A1', url: MAIN_URL },
+        { id: 'B2', url: MAIN_URL },
+      );
+      const client = mockClient({ pages: { A1: MAIN_URL, B2: MAIN_URL }, devTools });
+      (client.getWindowHandles as Mock).mockResolvedValueOnce(['A1']);
+      vi.useFakeTimers();
+      const attached = webView(client).attach({ page: REBUILT });
+      await vi.runAllTimersAsync();
+      await attached;
+      expect(client.getWindowHandles).toHaveBeenCalledTimes(2);
+      // Never A1, even though it is at the same URL.
+      expect(windows(client)).toEqual(['B2']);
+    });
+
+    test("Chrome: a numbered tab is the window at the tab's current URL", async () => {
+      // The tab redirected since waitForWebPage returned it.
+      const devTools = listing(
+        'WEBVIEW_chrome',
+        { id: '4', url: 'https://example.com/' },
+        { id: '5', url: 'https://sso.example.com/done' },
+      );
+      const client = mockClient({
+        contexts: ['NATIVE_APP', 'WEBVIEW_chrome'],
+        pages: { '9F2C': 'https://example.com/', '0B7E': 'https://sso.example.com/done' },
+        devTools,
+      });
+      const tab = {
+        context: 'WEBVIEW_chrome',
+        key: 'WEBVIEW_chrome#5',
+        url: 'https://sso.example.com/start',
+        title: '',
+      };
+      await webView(client).attach({ page: tab });
+      expect(windows(client).at(-1)).toBe('0B7E');
+    });
+
+    test('Chrome: two tabs at the URL cannot be told apart', async () => {
+      const url = 'https://example.com/';
+      const client = mockClient({
+        contexts: ['NATIVE_APP', 'WEBVIEW_chrome'],
+        pages: { '9F2C': url, '0B7E': url },
+        devTools: listing('WEBVIEW_chrome', { id: '4', url }, { id: '5', url }),
+      });
+      const tab = { context: 'WEBVIEW_chrome', key: 'WEBVIEW_chrome#5', url, title: '' };
+      vi.useFakeTimers();
+      const attached = webView(client)
+        .attach({ page: tab, timeout: 3_000 })
+        .catch((e: Error) => e);
+      await vi.runAllTimersAsync();
+      expect(((await attached) as Error).message).toContain(
+        'Last error: no single window for page WEBVIEW_chrome#5: none is listed under its id, ' +
+          'and 2 are at https://example.com/',
+      );
+    });
+
+    test('times out naming the page once it is no longer listed', async () => {
+      const client = mockClient({ devTools: listing(APP_CONTEXT, { id: 'A1', url: MAIN_URL }) });
+      vi.useFakeTimers();
+      const attached = webView(client)
+        .attach({ page: REBUILT, timeout: 3_000 })
+        .catch((e: Error) => e);
+      await vi.runAllTimersAsync();
+      const error = (await attached) as Error;
+      expect(error.message).toContain(`could not reach a live page in ${APP_CONTEXT}#B2 within`);
+      expect(error.message).toContain(`Last error: page ${APP_CONTEXT}#B2 is no longer listed`);
+    });
+
+    test('iOS: the context is the page, so no window is picked', async () => {
+      const client = mockClient({ isAndroid: false, contexts: ['NATIVE_APP', 'WEBVIEW_61028.2'] });
+      const page = { context: 'WEBVIEW_61028.2', key: 'WEBVIEW_61028.2', url: MAIN_URL, title: '' };
+      expect(await webView(client).attach({ page })).toBe('WEBVIEW_61028.2');
+      expect(switches(client)).toEqual(['NATIVE_APP', 'WEBVIEW_61028.2']);
+      expect(client.getWindowHandles).not.toHaveBeenCalled();
+      expect(client.executeScript).not.toHaveBeenCalledWith(
+        'mobile: getContexts',
+        expect.anything(),
+      );
+    });
+
+    test('is not combined with context or pageUrl', async () => {
+      const client = mockClient();
+      await expect(webView(client).attach({ page: REBUILT, pageUrl: '/main' })).rejects.toThrow(
+        'attach: pass `page`, or `context` and `pageUrl`, not both.',
+      );
+      expect(client.switchAppiumContext).not.toHaveBeenCalled();
+    });
+  });
+
+  test('keeps trying until the page is ready and holds the probe', async () => {
+    const states: PageState[] = [
+      { readyState: 'loading' },
+      { readyState: 'complete', probe: false },
+      { readyState: 'complete', probe: true },
+    ];
+    let tick = 0;
+    const client = mockClient({
+      page: () => states[Math.min(Math.floor(tick++ / 2), states.length - 1)]!,
+    });
+    vi.useFakeTimers();
+    const attached = webView(client).attach({ probeSelector: '[data-testid="login-field"]' });
+    await vi.runAllTimersAsync();
+    expect(await attached).toBe(`WEBVIEW_${APP}`);
+    const probes = (client.executeScript as Mock).mock.calls.filter(([s]) =>
+      s.includes('querySelector'),
+    );
+    expect(probes.at(-1)![0]).toBe(
+      'return document.querySelector("[data-testid=\\"login-field\\"]") != null;',
+    );
+  });
+
+  test('a dead session fails at once', async () => {
+    const client = mockClient();
+    // Appium's own session is gone: every command fails, including asking for the context.
+    (client.switchAppiumContext as Mock).mockRejectedValue(new Error('invalid session id'));
+    (client.getAppiumContext as Mock).mockRejectedValue(new Error('invalid session id'));
+    await expect(webView(client).attach({ timeout: 60_000 })).rejects.toThrow('invalid session id');
+    expect(client.switchAppiumContext).toHaveBeenCalledTimes(1);
+  });
+
+  test('times out naming what it waited for, every context, and the last error', async () => {
+    const client = mockClient({
+      contexts: ['NATIVE_APP', 'WEBVIEW_com.other.app'],
+    });
+    await expect(webView(client).attach({ probeSelector: '#x', timeout: 0 })).rejects.toThrow(
+      'attach: could not reach a page containing "#x" within 0ms. Contexts Appium reports: ' +
+        '["NATIVE_APP","WEBVIEW_com.other.app"]. Last error: no WebView context is available yet',
+    );
+  });
+
+  test('settle waits for the WEBVIEW contexts to stop changing first', async () => {
+    // iOS relaunch: the old page is listed for a few samples, then replaced.
+    let samples = 0;
+    const client = mockClient({
+      isAndroid: false,
+      contexts: () =>
+        ++samples <= 3 ? ['NATIVE_APP', 'WEBVIEW_1.1'] : ['NATIVE_APP', 'WEBVIEW_2.1'],
+    });
+    vi.useFakeTimers();
+    const attached = webView(client).attach({ settle: true });
+    await vi.runAllTimersAsync();
+    expect(await attached).toBe('WEBVIEW_2.1');
+    // Changed at the 4th sample, then five more unchanged seconds before the attach.
+    expect(samples).toBeGreaterThanOrEqual(9);
+  });
+});
+
+describe('WebView discovery', () => {
+  test('with Chrome in front, binds nothing and says how to bind Chrome', async () => {
+    const client = mockClient({
+      contexts: ['NATIVE_APP', `WEBVIEW_${APP}`, 'WEBVIEW_chrome'],
+      foreground: 'com.android.chrome',
+    });
+    await expect(webView(client).attach({ timeout: 0 })).rejects.toThrow(
+      "com.android.chrome is in front: bind its page with webView.attach({ context: 'WEBVIEW_chrome' })",
+    );
+    expect(switches(client)).not.toContain('WEBVIEW_chrome');
+  });
+
+  test('other apps’ WebViews are ignored on Android; detailed contexts are named by id', async () => {
+    const client = mockClient({
+      contexts: [
+        { id: 'NATIVE_APP' },
+        { id: 'WEBVIEW_com.other.app', title: 'Other' },
+        { id: `WEBVIEW_${APP}`, title: 'App' },
+      ],
+    });
+    const log = vi.spyOn(console, 'log');
+    await webView(client)
+      .getByTestId('x')
+      .getElement()
+      .catch(() => undefined);
+    expect(switches(client)).toContain(`WEBVIEW_${APP}`);
+    expect(switches(client)).not.toContain('WEBVIEW_com.other.app');
+    // Said out loud rather than dropped silently.
+    expect(log).toHaveBeenCalledWith(
+      `[WebView] Skipping WEBVIEW_com.other.app: not ${APP}'s, the app in front.`,
+    );
+    log.mockRestore();
+  });
+});
+
+describe("an app's WebView bound by attach()", () => {
+  test('is not bound again once another app with a WebView is in front', async () => {
+    const state = { foreground: APP };
+    const client = mockClient({
+      contexts: ['NATIVE_APP', `WEBVIEW_${APP}`, 'WEBVIEW_com.other.app'],
+    });
+    const executeScript = (client.executeScript as Mock).getMockImplementation()!;
+    (client.executeScript as Mock).mockImplementation(async (script: string, args: unknown[]) =>
+      script === 'mobile: getCurrentPackage' ? state.foreground : executeScript(script, args),
+    );
+    const view = webView(client);
+    await view.attach();
+    await client.switchAppiumContext('NATIVE_APP');
+    state.foreground = 'com.other.app';
+    const log = vi.spyOn(console, 'log');
+
+    await view.evaluate('return 1');
+    expect(switches(client).at(-1)).toBe('WEBVIEW_com.other.app');
+    expect(log).toHaveBeenCalledWith(
+      `[WebView] Not returning to WEBVIEW_${APP}, which attach() bound: com.other.app is in ` +
+        'front, not the app it belongs to. Discovering a WebView instead.',
+    );
+    log.mockRestore();
+  });
+});
+
+describe('a browser bound by attach({ context })', () => {
+  const CHROME = 'com.android.chrome';
+  const pages = {
+    'CDwindow-1': 'chrome-native://newtab/',
+    'CDwindow-2': 'https://sso.example.com/',
+  };
+
+  /** Chrome in front, showing the sign-in tab; `state` moves the app back in front. */
+  function chromeClient() {
+    const state = { foreground: CHROME, visibility: 'visible' };
+    const client = mockClient({
+      contexts: ['NATIVE_APP', `WEBVIEW_${APP}`, 'WEBVIEW_chrome'],
+      pages: { ...pages },
+    });
+    const executeScript = (client.executeScript as Mock).getMockImplementation()!;
+    (client.executeScript as Mock).mockImplementation(async (script: string, args: unknown[]) => {
+      if (script === 'mobile: getCurrentPackage') {
+        return state.foreground;
+      }
+      if (script.includes('visibilityState')) {
+        return state.visibility;
+      }
+      return executeScript(script, args);
+    });
+    return { client, state };
+  }
+
+  test('stays bound, on its tab, across a native call while Chrome is in front', async () => {
+    const { client } = chromeClient();
+    const view = webView(client);
+    await view.attach({ context: 'WEBVIEW_chrome', pageUrl: 'sso.example.com' });
+    // Any native `device` call leaves the WebView.
+    await client.switchAppiumContext('NATIVE_APP');
+    (client.switchToWindow as Mock).mockClear();
+
+    await view.evaluate('return 1');
+    expect(switches(client).at(-1)).toBe('WEBVIEW_chrome');
+    expect(client.switchToWindow).toHaveBeenCalledWith('CDwindow-2');
+  });
+
+  test('while Chrome shows its page, a call neither leaves nor rebinds it', async () => {
+    const { client } = chromeClient();
+    const view = webView(client);
+    await view.attach({ context: 'WEBVIEW_chrome' });
+    (client.switchAppiumContext as Mock).mockClear();
+    // The visibility check is appwright's own: it must not add an `evaluate` step to the report.
+    const evaluate = vi.spyOn(Device.prototype, 'evaluate');
+
+    await view.evaluate('return 1');
+    expect(switches(client)).toEqual([]);
+    expect(evaluate.mock.calls).toEqual([['return 1']]);
+    evaluate.mockRestore();
+  });
+
+  test('with Chrome in front, discovery gives up within seconds, saying how to bind it', async () => {
+    const { client } = chromeClient();
+    vi.useFakeTimers();
+    const failed = webView(client)
+      .evaluate('return 1')
+      .catch((e: Error) => e);
+    // Discovery's own retries run for over half a minute; a browser in front cuts them short.
+    await vi.advanceTimersByTimeAsync(15_000);
+    const error = await failed;
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain(
+      "com.android.chrome is in front: bind its page with webView.attach({ context: 'WEBVIEW_chrome' })",
+    );
+  });
+
+  test("once the app is back in front, the next call binds the app's WebView, saying why", async () => {
+    const { client, state } = chromeClient();
+    const view = webView(client);
+    await view.attach({ context: 'WEBVIEW_chrome' });
+    state.foreground = APP;
+    state.visibility = 'hidden';
+    const log = vi.spyOn(console, 'log');
+
+    await view.evaluate('return 1');
+    expect(switches(client).at(-1)).toBe(`WEBVIEW_${APP}`);
+    expect(log).toHaveBeenCalledWith(
+      `[WebView] Leaving WEBVIEW_chrome: ${APP} is in front, not the browser.`,
+    );
+    log.mockRestore();
+  });
+
+  test('after a native call, a Chrome that left the front is not bound again', async () => {
+    const { client, state } = chromeClient();
+    const view = webView(client);
+    await view.attach({ context: 'WEBVIEW_chrome' });
+    await client.switchAppiumContext('NATIVE_APP');
+    state.foreground = APP;
+
+    await view.evaluate('return 1');
+    expect(switches(client).at(-1)).toBe(`WEBVIEW_${APP}`);
+  });
+});
+
+describe('a dropped WebView renderer', () => {
+  const DROPPED = new Error(
+    'invalid session id: session deleted as the browser has closed the connection',
+  );
+  const ELEMENT = { 'element-6066-11e4-a52e-4f735466cecf': 'el' };
+
+  /**
+   * A WebView whose renderer drops at the first page lookup: chromedriver then fails every
+   * lookup until the session hops through NATIVE_APP, which makes Appium start a new one.
+   */
+  function droppingClient(isAndroid: boolean): MockClient {
+    const client = mockClient({ isAndroid });
+    const executeScript = (client.executeScript as Mock).getMockImplementation()!;
+    const switchContext = (client.switchAppiumContext as Mock).getMockImplementation()!;
+    let state: 'live' | 'dead' | 'restarted' = 'live';
+    (client.switchAppiumContext as Mock).mockImplementation(async (name: string) => {
+      if (name === 'NATIVE_APP' && state === 'dead') {
+        state = 'restarted';
+      }
+      return switchContext(name);
+    });
+    (client.executeScript as Mock).mockImplementation(async (script: string, args: unknown[]) => {
+      if (script.includes('querySelectorAll')) {
+        if (state === 'live') {
+          state = 'dead';
+        }
+        if (state === 'dead') {
+          throw DROPPED;
+        }
+        return [ELEMENT];
+      }
+      return executeScript(script, args);
+    });
+    Object.assign(client, {
+      isElementDisplayed: vi.fn().mockResolvedValue(true),
+      elementClick: vi.fn().mockResolvedValue(undefined),
+    });
+    return client;
+  }
+
+  test('Android: an action re-attaches through NATIVE_APP and goes on', async () => {
+    const client = droppingClient(true);
+    vi.useFakeTimers();
+    const tapped = webView(client).getByRole('button', { name: 'Save' }).tap();
+    await vi.runAllTimersAsync();
+    await tapped;
+
+    expect(switches(client)).toEqual([`WEBVIEW_${APP}`, 'NATIVE_APP', `WEBVIEW_${APP}`]);
+    expect(client.elementClick).toHaveBeenCalledWith('el');
+  });
+
+  test('iOS: the same error means the session is gone, and fails the action', async () => {
+    const client = droppingClient(false);
+    await expect(webView(client).getByRole('button', { name: 'Save' }).tap()).rejects.toThrow(
+      'invalid session id',
+    );
+    expect(switches(client)).not.toContain('NATIVE_APP');
+  });
+
+  test("Android: when Appium's session is gone too, it still fails at once", async () => {
+    const client = droppingClient(true);
+    await webView(client).attach();
+    (client.getAppiumContext as Mock).mockRejectedValue(DROPPED);
+    await expect(webView(client).getByRole('button', { name: 'Save' }).tap()).rejects.toThrow(
+      'invalid session id',
+    );
+  });
+
+  /** A page whose renderer drops once, at the first `script` it runs. */
+  function droppingOnce(client: MockClient, script: string, error: Error = DROPPED) {
+    const executeScript = (client.executeScript as Mock).getMockImplementation()!;
+    let dropped = false;
+    (client.executeScript as Mock).mockImplementation(async (body: string, args: unknown[]) => {
+      if (body === script) {
+        if (!dropped) {
+          dropped = true;
+          throw error;
+        }
+        return 'ran';
+      }
+      return executeScript(body, args);
+    });
+  }
+
+  test('Android: evaluate() re-attaches through NATIVE_APP and runs again', async () => {
+    const client = mockClient();
+    droppingOnce(client, 'return document.title');
+    vi.useFakeTimers();
+    const evaluated = webView(client).evaluate('return document.title');
+    await vi.runAllTimersAsync();
+    expect(await evaluated).toBe('ran');
+    expect(switches(client)).toEqual([`WEBVIEW_${APP}`, 'NATIVE_APP', `WEBVIEW_${APP}`]);
+  });
+
+  test('an error named after the W3C code counts, whatever its message says', async () => {
+    const client = mockClient();
+    const renamed = Object.assign(new Error('session deleted'), { name: 'invalid session id' });
+    droppingOnce(client, 'return document.title', renamed);
+    vi.useFakeTimers();
+    const evaluated = webView(client).evaluate('return document.title');
+    await vi.runAllTimersAsync();
+    expect(await evaluated).toBe('ran');
+  });
+
+  test('binds the context and window attach() chose again, not the first ones', async () => {
+    const client = mockClient({
+      pages: {
+        'CDwindow-1': 'https://app.example.com/',
+        'CDwindow-2': 'https://app.example.com/b',
+      },
+    });
+    const view = webView(client);
+    await view.attach({ pageUrl: '/b' });
+    droppingOnce(client, 'return document.title');
+    (client.switchToWindow as Mock).mockClear();
+
+    vi.useFakeTimers();
+    const evaluated = view.evaluate('return document.title');
+    await vi.runAllTimersAsync();
+    expect(await evaluated).toBe('ran');
+    expect((client.switchToWindow as Mock).mock.calls.map((c) => c[0])).toEqual(['CDwindow-2']);
+  });
+
+  test('fails, saying so, when the window attach() chose is gone', async () => {
+    const pages: Record<string, string> = {
+      'CDwindow-1': 'https://app.example.com/',
+      'CDwindow-2': 'https://app.example.com/b',
+    };
+    const client = mockClient({ pages });
+    const view = webView(client);
+    await view.attach({ pageUrl: '/b' });
+    droppingOnce(client, 'return document.title');
+    delete pages['CDwindow-2'];
+
+    await expect(view.evaluate('return document.title')).rejects.toThrow(
+      /window CDwindow-2 is closed .* Call webView\.attach\(\) to bind the page to use now/,
+    );
+    // Not left in the WebView's context on whatever window it fell back to: the next call
+    // discovers a WebView again rather than run there unnoticed.
+    expect(await client.getAppiumContext()).toBe('NATIVE_APP');
+    (client.getAppiumContexts as Mock).mockClear();
+    await view.evaluate('return 1');
+    expect(client.getAppiumContexts).toHaveBeenCalled();
+  });
+
+  test('a plain attach() pins no window, so a WebView rebuilt under a new one is found', async () => {
+    const pages: Record<string, string> = { 'CDwindow-1': 'https://app.example.com/' };
+    const client = mockClient({ pages });
+    const view = webView(client);
+    await view.attach();
+    droppingOnce(client, 'return document.title');
+    // The app rebuilt its WebView: a new DevTools target, so a new window.
+    delete pages['CDwindow-1'];
+    pages['CDwindow-9'] = 'https://app.example.com/';
+
+    vi.useFakeTimers();
+    const evaluated = view.evaluate('return document.title');
+    await vi.runAllTimersAsync();
+    expect(await evaluated).toBe('ran');
+    expect(client.switchToWindow).not.toHaveBeenCalled();
+  });
+
+  test("a page script's own error is not a renderer drop, whatever its text says", async () => {
+    for (const thrown of [
+      Object.assign(new Error('Server said: invalid session id'), { name: 'javascript error' }),
+      new Error('javascript error: Server said: invalid session id'),
+    ]) {
+      const client = mockClient();
+      droppingOnce(client, 'return login()', thrown);
+      await expect(webView(client).evaluate('return login()')).rejects.toBe(thrown);
+      const runs = (client.executeScript as Mock).mock.calls.filter(
+        (c) => c[0] === 'return login()',
+      );
+      expect(runs).toHaveLength(1);
+    }
+  });
+
+  test('attach() keeps trying through a renderer drop', async () => {
+    const client = mockClient();
+    const executeScript = (client.executeScript as Mock).getMockImplementation()!;
+    let dropped = false;
+    (client.executeScript as Mock).mockImplementation(async (script: string, args: unknown[]) => {
+      if (!dropped && script.includes('readyState')) {
+        dropped = true;
+        throw DROPPED;
+      }
+      return executeScript(script, args);
+    });
+    vi.useFakeTimers();
+    const attached = webView(client).attach();
+    await vi.runAllTimersAsync();
+    expect(await attached).toBe(`WEBVIEW_${APP}`);
+  });
+});
+
+describe('a closed window', () => {
+  const CLOSED = Object.assign(new Error('no such window: target window already closed'), {
+    name: 'no such window',
+  });
+
+  function closingOnce(client: MockClient, script: string) {
+    const executeScript = (client.executeScript as Mock).getMockImplementation()!;
+    let closed = false;
+    (client.executeScript as Mock).mockImplementation(async (body: string, args: unknown[]) => {
+      if (body === script) {
+        if (!closed) {
+          closed = true;
+          throw CLOSED;
+        }
+        return 'ran';
+      }
+      return executeScript(body, args);
+    });
+  }
+
+  test('that attach() chose fails, naming it, instead of running on another page', async () => {
+    const pages: Record<string, string> = {
+      'CDwindow-1': 'https://app.example.com/',
+      'CDwindow-2': 'https://idp.example.com/popup',
+    };
+    const client = mockClient({ pages });
+    const view = webView(client);
+    await view.attach({ pageUrl: '/popup' });
+    closingOnce(client, 'return document.title');
+    delete pages['CDwindow-2'];
+
+    await expect(view.evaluate('return document.title')).rejects.toThrow(
+      /^The window the WebView was on closed, and WEBVIEW_com\.example\.app, which attach\(\) bound, cannot be bound again: its window CDwindow-2 is closed/,
+    );
+    const runs = (client.executeScript as Mock).mock.calls.filter(
+      (c) => c[0] === 'return document.title',
+    );
+    expect(runs).toHaveLength(1);
+  });
+
+  test('with nothing attached, is retried once a WebView is bound again', async () => {
+    const client = mockClient();
+    closingOnce(client, 'return document.title');
+    vi.useFakeTimers();
+    const evaluated = webView(client).evaluate('return document.title');
+    await vi.runAllTimersAsync();
+    expect(await evaluated).toBe('ran');
+    expect(switches(client)).toEqual([`WEBVIEW_${APP}`, 'NATIVE_APP', `WEBVIEW_${APP}`]);
+  });
+});
+
+describe('errors from a WebView locator', () => {
+  test('keep their class and stack, so not.toBeVisible() can tell a timeout apart', async () => {
+    const client = mockClient();
+    Object.assign(client, {
+      findElements: vi.fn().mockResolvedValue([{ 'element-6066-11e4-a52e-4f735466cecf': 'el' }]),
+      isElementDisplayed: vi.fn().mockResolvedValue(true),
+    });
+    const error = await webView(client)
+      .css('#still-there')
+      .waitFor('hidden', { timeout: 0 })
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(TimeoutError);
+    expect((error as Error).stack).toContain('waitForElementId');
+  });
+});
+
+describe('urlMatches', () => {
+  test('a global RegExp matches the same URL on every poll', () => {
+    const pattern = /\/main/g;
+    expect(urlMatches('https://app.example.com/main', pattern)).toBe(true);
+    expect(urlMatches('https://app.example.com/main', pattern)).toBe(true);
+    expect(urlMatches('https://app.example.com/help', pattern)).toBe(false);
+  });
+});
+
+describe('displayUrl', () => {
+  test('drops a query and fragment, marking that it did', () => {
+    expect(displayUrl('https://app.example.com/callback?code=abc&state=x')).toBe(
+      'https://app.example.com/callback?…',
+    );
+    expect(displayUrl('https://app.example.com/#access_token=abc')).toBe(
+      'https://app.example.com/#…',
+    );
+    expect(displayUrl('https://app.example.com/a?b=1#c')).toBe('https://app.example.com/a?…#…');
+    expect(displayUrl('about:blank')).toBe('about:blank');
+  });
+});

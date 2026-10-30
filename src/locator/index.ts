@@ -4,15 +4,38 @@ import { Client as WebDriverClient } from 'webdriver';
 
 import {
   ActionOptions,
+  AppwrightLocator,
+  AriaRole,
   ELEMENT_REFERENCE_ID,
   ElementReference,
   FillOptions,
+  LabelOptions,
+  Rect,
+  RoleOptions,
   ScrollDirection,
+  TextOptions,
   TimeoutOptions,
   WebDriverErrors,
 } from '../types';
-import { NonRetryableError, RetryableError, TimeoutError } from '../types/errors';
-import { boxedStep, isNoSuchWindowError } from '../utils';
+import { RetryableError, TimeoutError } from '../types/errors';
+import { boxedStep, isInvalidSessionError, isNoSuchWindowError } from '../utils';
+import {
+  LocatorQuery,
+  nativeIdQuery,
+  nativeLabelQuery,
+  nativeTextQuery,
+  SCRIPT_FIND_STRATEGY,
+  webLabelQuery,
+  webRoleQuery,
+  webTestIdQuery,
+  webTextQuery,
+} from './queries';
+
+/** Whether the driver rejected an element reference because its node left the page. */
+function isStaleElementError(error: unknown): boolean {
+  const name = (error as { name?: unknown } | null)?.name;
+  return typeof name === 'string' && name.includes(WebDriverErrors.StaleElementReferenceError);
+}
 
 /**
  * Empties an `<input>`/`<textarea>` the way React notices. chromedriver's `elementClear` fires
@@ -49,7 +72,34 @@ const ANDROID_KEYCODES: Record<string, number> = {
 
 type ElementState = 'attached' | 'visible' | 'hidden';
 
+/**
+ * Locator methods that build another locator rather than act on the element. They are
+ * synchronous, so the context-switching proxies of `Device` and `WebView` pass them through.
+ */
+export const CHAIN_METHODS: ReadonlySet<PropertyKey> = new Set([
+  'getByText',
+  'getByRole',
+  'getByLabel',
+  'getByTestId',
+]);
+
+export type LocatorOptions = {
+  /** For a chained locator: the locator whose element this one is looked up inside. */
+  parent?: Locator;
+  /** Shown in step titles and errors instead of the selector. */
+  description?: string;
+  /**
+   * Turns a chained child into what the caller gets back: the context-switching proxy of the
+   * `Device` or `WebView` that made this locator.
+   */
+  wrap?: (locator: Locator) => AppwrightLocator;
+};
+
 export class Locator {
+  private readonly parent?: Locator;
+  readonly description?: string;
+  private readonly wrap?: (locator: Locator) => AppwrightLocator;
+
   constructor(
     private webDriverClient: WebDriverClient,
     private timeoutOpts: TimeoutOptions,
@@ -63,7 +113,67 @@ export class Locator {
      * differ between chromedriver (DOM) and the native drivers (element attributes).
      */
     private isWeb: boolean = false,
-  ) {}
+    { parent, description, wrap }: LocatorOptions = {},
+  ) {
+    this.parent = parent;
+    this.description = description;
+    this.wrap = wrap;
+  }
+
+  /** How errors name this locator: its description, else its selector in quotes. */
+  private get named(): string {
+    return this.description ?? `"${this.selector}"`;
+  }
+
+  getByText(text: string | RegExp, options?: TextOptions): AppwrightLocator {
+    return this.chain(
+      this.isWeb
+        ? webTextQuery(text, options)
+        : nativeTextQuery(this.webDriverClient.isAndroid, text, options),
+    );
+  }
+
+  getByRole(role: AriaRole, options?: RoleOptions): AppwrightLocator {
+    if (!this.isWeb) {
+      throw new Error(
+        'getByRole() needs a WebView locator: native views have no ARIA roles. Chain ' +
+          'getByText(), getByLabel() or getByTestId() instead.',
+      );
+    }
+    return this.chain(webRoleQuery(role, options));
+  }
+
+  getByLabel(label: string, options?: LabelOptions): AppwrightLocator {
+    return this.chain(
+      this.isWeb
+        ? webLabelQuery(label, options)
+        : nativeLabelQuery(this.webDriverClient.isAndroid, label, options),
+    );
+  }
+
+  getByTestId(testId: string): AppwrightLocator {
+    return this.chain(
+      this.isWeb ? webTestIdQuery(testId) : nativeIdQuery(this.webDriverClient.isAndroid, testId),
+    );
+  }
+
+  private chain(query: LocatorQuery): AppwrightLocator {
+    const parentName = this.description ?? this.selector;
+    const child = new Locator(
+      this.webDriverClient,
+      this.timeoutOpts,
+      query.selector,
+      query.findStrategy,
+      query.textToMatch,
+      this.isWeb,
+      {
+        parent: this,
+        description: `${parentName} >> ${query.description ?? query.selector}`,
+        wrap: this.wrap,
+      },
+    );
+    return this.wrap ? this.wrap(child) : child;
+  }
 
   /**
    * Replaces the element's contents with `value`: clear, type, then read the value back. iOS
@@ -80,102 +190,105 @@ export class Locator {
     const secret = options?.secret === true;
     const verify = options?.verify !== false;
     const actionOptions = this.toActionOptions(options);
-    const elementId = await this.requireVisibleElementId('fill', actionOptions);
+    return await this.withVisibleElement('fill', actionOptions, async (elementId) => {
+      if (!this.isWeb && !this.webDriverClient.isAndroid) {
+        await this.webDriverClient.elementClick(elementId);
+      }
 
-    if (!this.isWeb && !this.webDriverClient.isAndroid) {
-      await this.webDriverClient.elementClick(elementId);
-    }
-
-    if (!verify) {
-      await this.clearElement(elementId);
-      await this.webDriverClient.elementSendKeys(elementId, value);
-      return;
-    }
-
-    let entered = '';
-    for (let attempt = 1; attempt <= 2; attempt += 1) {
-      await this.clearElement(elementId);
-      await this.webDriverClient.elementSendKeys(elementId, value);
-
-      entered = await this.readValue(elementId);
-      if (Locator.valueMatches(entered, value, secret)) {
+      if (!verify) {
+        await this.clearElement(elementId);
+        await this.webDriverClient.elementSendKeys(elementId, value);
         return;
       }
-    }
 
-    const got = secret ? `${entered.length} character(s)` : JSON.stringify(entered);
-    const expected = secret ? `${value.length} character(s)` : JSON.stringify(value);
-    throw new Error(
-      `Failed to fill: Element "${this.selector}" holds ${got} after filling ${expected}. ` +
-        'If the field reformats what is typed (input mask, maxLength, autocorrect), pass ' +
-        '`{ verify: false }` and assert with inputValue() instead.',
-    );
+      let entered = '';
+      for (let attempt = 1; attempt <= 2; attempt += 1) {
+        await this.clearElement(elementId);
+        await this.webDriverClient.elementSendKeys(elementId, value);
+
+        entered = await this.readValue(elementId);
+        if (Locator.valueMatches(entered, value, secret)) {
+          return;
+        }
+      }
+
+      const got = secret ? `${entered.length} character(s)` : JSON.stringify(entered);
+      const expected = secret ? `${value.length} character(s)` : JSON.stringify(value);
+      throw new Error(
+        `Failed to fill: Element ${this.named} holds ${got} after filling ${expected}. ` +
+          'If the field reformats what is typed (input mask, maxLength, autocorrect), pass ' +
+          '`{ verify: false }` and assert with inputValue() instead.',
+      );
+    });
   }
 
   @boxedStep
   async clear(options?: ActionOptions): Promise<void> {
-    const elementId = await this.requireVisibleElementId('clear', options);
-    await this.clearElement(elementId);
+    return await this.withVisibleElement('clear', options, async (elementId) => {
+      await this.clearElement(elementId);
+    });
   }
 
   @boxedStep
   async press(key: string, options?: ActionOptions): Promise<void> {
-    const elementId = await this.requireVisibleElementId('press', options);
+    return await this.withVisibleElement('press', options, async (elementId) => {
+      if (this.isWeb || !this.webDriverClient.isAndroid) {
+        // chromedriver and XCUITest both type a "\n" as the Return key without touching the value.
+        await this.webDriverClient.elementSendKeys(elementId, KEY_MAP[key] ?? key);
+        return;
+      }
 
-    if (this.isWeb || !this.webDriverClient.isAndroid) {
-      // chromedriver and XCUITest both type a "\n" as the Return key without touching the value.
-      await this.webDriverClient.elementSendKeys(elementId, KEY_MAP[key] ?? key);
-      return;
-    }
-
-    // Native Android: send key events to the focused field instead of setText (see
-    // ANDROID_KEYCODES). Tapping first puts focus on this element; it does not change the text.
-    await this.webDriverClient.elementClick(elementId);
-    const keycode = ANDROID_KEYCODES[key];
-    if (keycode != null) {
-      await this.webDriverClient.executeScript('mobile: pressKey', [{ keycode }]);
-      return;
-    }
-    await this.webDriverClient.performActions([
-      {
-        type: 'key',
-        id: 'keyboard',
-        actions: key.split('').flatMap((char) => [
-          { type: 'keyDown', value: char },
-          { type: 'keyUp', value: char },
-        ]),
-      },
-    ]);
-    await this.webDriverClient.releaseActions();
+      // Native Android: send key events to the focused field instead of setText (see
+      // ANDROID_KEYCODES). Tapping first puts focus on this element; it does not change the text.
+      await this.webDriverClient.elementClick(elementId);
+      const keycode = ANDROID_KEYCODES[key];
+      if (keycode != null) {
+        await this.webDriverClient.executeScript('mobile: pressKey', [{ keycode }]);
+        return;
+      }
+      await this.webDriverClient.performActions([
+        {
+          type: 'key',
+          id: 'keyboard',
+          actions: key.split('').flatMap((char) => [
+            { type: 'keyDown', value: char },
+            { type: 'keyUp', value: char },
+          ]),
+        },
+      ]);
+      await this.webDriverClient.releaseActions();
+    });
   }
 
   @boxedStep
   async inputValue(options?: ActionOptions): Promise<string> {
-    const elementId = await this.requireVisibleElementId('inputValue', options);
-    return await this.readValue(elementId);
+    return await this.withVisibleElement('inputValue', options, async (elementId) => {
+      return await this.readValue(elementId);
+    });
   }
 
   @boxedStep
   async sendKeyStrokes(value: string, options?: ActionOptions): Promise<void> {
-    const elementId = await this.requireVisibleElementId('sendKeyStrokes', options);
-    await this.webDriverClient.elementClick(elementId);
-    const actions = value
-      .split('')
-      .map((char) => [
-        { type: 'keyDown', value: char },
-        { type: 'keyUp', value: char },
-      ])
-      .flat();
+    return await this.withVisibleElement('sendKeyStrokes', options, async (elementId) => {
+      await this.webDriverClient.elementClick(elementId);
+      const actions = value
+        .split('')
+        .map((char) => [
+          { type: 'keyDown', value: char },
+          { type: 'keyUp', value: char },
+        ])
+        .flat();
 
-    await this.webDriverClient.performActions([
-      {
-        type: 'key',
-        id: 'keyboard',
-        actions: actions,
-      },
-    ]);
+      await this.webDriverClient.performActions([
+        {
+          type: 'key',
+          id: 'keyboard',
+          actions: actions,
+        },
+      ]);
 
-    await this.webDriverClient.releaseActions();
+      await this.webDriverClient.releaseActions();
+    });
   }
 
   async isVisible(options?: ActionOptions): Promise<boolean> {
@@ -191,44 +304,73 @@ export class Locator {
   }
 
   async waitFor(state: ElementState, options?: ActionOptions): Promise<void> {
-    const timeoutFromConfig = this.timeoutOpts.expectTimeout;
-    const timeout = options?.timeout || timeoutFromConfig;
-    const result = await this.waitUntil(async () => {
-      const element = await this.getElement();
-      const elementId = element?.[ELEMENT_REFERENCE_ID];
+    await this.waitForElementId(state, options);
+  }
 
-      if (!elementId) {
-        // Nothing matches: that is exactly 'hidden', and not yet 'attached' or 'visible'.
-        return state === 'hidden';
-      }
-
+  /**
+   * Polls until the element is in `state`, then returns the reference id of the element the
+   * poll found there (`null` for 'hidden', which nothing need match), so an action can use it
+   * without looking the element up again. `timeout: 0` makes a single attempt.
+   *
+   * 'visible' takes the displayed match `displayedMatch()` picks, so a hidden duplicate (a
+   * closed menu, an off-screen copy) never stands in for the one on screen; 'hidden' holds
+   * while no match is displayed. 'attached' takes the match `getElement()` returns.
+   */
+  private async waitForElementId(
+    state: ElementState,
+    options?: ActionOptions,
+  ): Promise<string | null> {
+    const timeout = options?.timeout ?? this.timeoutOpts.expectTimeout;
+    return await this.waitUntil(async () => {
       if (state === 'attached') {
-        return true;
+        const element = await this.getElement();
+        return element?.[ELEMENT_REFERENCE_ID] || false;
       }
+      const displayed = await this.displayedMatch();
+      if (state === 'hidden') {
+        return displayed == null ? null : false;
+      }
+      return displayed || false;
+    }, timeout).catch((error: unknown) => {
+      if (error instanceof TimeoutError) {
+        const what = state === 'hidden' ? 'was still on the screen' : `did not become ${state}`;
+        throw new TimeoutError(`Element ${this.named} ${what} after ${timeout}ms`);
+      }
+      throw error;
+    });
+  }
 
+  /**
+   * The reference id of the first displayed element among `matches(true)` — the last displayed
+   * one in document order, under any of a chained locator's parent matches — or `null` when
+   * elements match but none is displayed, or `undefined` when none matches. Each match costs a
+   * display check until one passes, so a locator with many hidden matches costs one check per
+   * match per poll.
+   */
+  private async displayedMatch(): Promise<string | null | undefined> {
+    let matched = false;
+    for await (const element of this.matches(true)) {
+      const elementId = element[ELEMENT_REFERENCE_ID];
+      if (!elementId) {
+        continue;
+      }
+      matched = true;
       let isDisplayed: boolean;
       try {
         isDisplayed = await this.webDriverClient.isElementDisplayed(elementId);
       } catch (error) {
-        //@ts-ignore
-        const errName = error.name;
-        if (errName && errName.includes(WebDriverErrors.StaleElementReferenceError)) {
+        if (isStaleElementError(error)) {
           // A stale node is being re-rendered, not gone: re-find on the next tick for every
           // state, so a transient stale read never counts as "hidden".
           throw new RetryableError(`Stale element detected: ${error}`);
         }
         throw error;
       }
-
-      return state === 'hidden' ? !isDisplayed : isDisplayed;
-    }, timeout).catch((error: unknown) => {
-      if (error instanceof TimeoutError) {
-        const what = state === 'hidden' ? 'was still on the screen' : `did not become ${state}`;
-        throw new TimeoutError(`Element "${this.selector}" ${what} after ${timeout}ms`);
+      if (isDisplayed) {
+        return elementId;
       }
-      throw error;
-    });
-    return result;
+    }
+    return matched ? null : undefined;
   }
 
   private async waitUntil<ReturnValue>(
@@ -238,7 +380,7 @@ export class Locator {
     const fn = condition.bind(this.webDriverClient);
     try {
       return await retry(
-        async () => {
+        async (bail) => {
           try {
             const result = await fn();
             if (result === false) {
@@ -246,11 +388,13 @@ export class Locator {
             }
             return result as Exclude<ReturnValue, boolean>;
           } catch (error) {
-            if (isNoSuchWindowError(error)) {
-              throw new NonRetryableError(
-                error instanceof Error ? error.message : String(error),
-                'NoSuchWindowError',
-              );
+            // No lookup succeeds in a closed window or on a session the driver has deleted: give
+            // up at once, so the WebView can recover (see `recoverFromWindowClosure()` there)
+            // rather than after the whole timeout. The error goes out as the driver threw it:
+            // one marked `bail` would stop the WebView's own retry as well.
+            if (isNoSuchWindowError(error) || isInvalidSessionError(error)) {
+              bail(error as Error);
+              return undefined as Exclude<ReturnValue, boolean>;
             }
             throw error;
           }
@@ -273,21 +417,63 @@ export class Locator {
 
   @boxedStep
   async tap(options?: ActionOptions) {
-    const elementId = await this.requireVisibleElementId('tap', options);
-    await this.webDriverClient.elementClick(elementId);
+    return await this.withVisibleElement('tap', options, async (elementId) => {
+      await this.webDriverClient.elementClick(elementId);
+    });
   }
 
   @boxedStep
   async getText(options?: ActionOptions): Promise<string> {
-    const elementId = await this.requireVisibleElementId('getText', options);
-    return await this.webDriverClient.getElementText(elementId);
+    return await this.withVisibleElement('getText', options, async (elementId) => {
+      return await this.webDriverClient.getElementText(elementId);
+    });
+  }
+
+  @boxedStep
+  async boundingBox(options?: ActionOptions): Promise<Rect | null> {
+    const read = async () => {
+      const elementId = await this.waitForMatch(options);
+      if (elementId == null) {
+        return null;
+      }
+      const { x, y, width, height } = await this.webDriverClient.getElementRect(elementId);
+      return { x, y, width, height };
+    };
+    try {
+      return await read();
+    } catch (error) {
+      // As `withVisibleElement()`: the node was re-rendered between the wait and the read.
+      if (!isStaleElementError(error)) {
+        throw error;
+      }
+      return await read();
+    }
+  }
+
+  /**
+   * Waits for anything to match, as Playwright's `boundingBox()` does, then returns the
+   * displayed match's reference id, or `null` when every match is hidden.
+   */
+  private async waitForMatch(options?: ActionOptions): Promise<string | null> {
+    const timeout = options?.timeout ?? this.timeoutOpts.expectTimeout;
+    try {
+      return await this.waitUntil(async () => {
+        const displayed = await this.displayedMatch();
+        return displayed === undefined ? false : displayed;
+      }, timeout);
+    } catch (error) {
+      if (error instanceof TimeoutError) {
+        throw new Error(`Failed to boundingBox: Element ${this.named} is not found`);
+      }
+      throw error;
+    }
   }
 
   @boxedStep
   async scroll(direction: ScrollDirection) {
     const element = await this.getElement();
     if (!element) {
-      throw new Error(`Failed to scroll: Element "${this.selector}" not found`);
+      throw new Error(`Failed to scroll: Element ${this.named} not found`);
     }
     if (this.webDriverClient.isAndroid) {
       await this.webDriverClient.executeScript('mobile: scrollGesture', [
@@ -310,64 +496,138 @@ export class Locator {
   /**
    * Retrieves the element reference based on the `selector`.
    *
-   * @returns
+   * A single match is returned as is. Of several, the last in document order wins — the
+   * probability of finding the element is higher at higher depth — and with `textToMatch` set,
+   * the last whose text matches it: a RegExp `getByText()` can only narrow the driver's search
+   * to a substring, if that.
+   *
+   * A chained locator looks inside its parent's element, trying the parent's matches in the same
+   * order until one contains a match.
    */
   async getElement(): Promise<ElementReference | null> {
-    /**
-     * Determine whether `path` is a regex or string, and find elements accordingly.
-     *
-     * If `path` is a regex:
-     * - Iterate through all the elements on the page
-     * - Extract text content of each element
-     * - Return the first matching element
-     *
-     * If `path` is a string:
-     * - Use `findStrategy` (either XPath, Android UIAutomator, or iOS predicate string) to find elements
-     * - Apply regex to clean extra characters from the matched element’s text
-     * - Return the first element that matches
-     */
-    let elements: ElementReference[] = await this.webDriverClient.findElements(
-      this.findStrategy,
-      this.selector,
-    );
-    // If there is only one element, return it
-    if (elements.length === 1) {
-      return elements[0]!;
-    }
-    // If there are multiple elements, we reverse the order since the probability
-    // of finding the element is higher at higher depth
-    const reversedElements = elements.reverse();
-    for (const element of reversedElements) {
-      let elementText = await this.webDriverClient.getElementText(element[ELEMENT_REFERENCE_ID]);
-      if (this.textToMatch) {
-        if (this.textToMatch instanceof RegExp && this.textToMatch.test(elementText)) {
-          return element;
-        }
-        if (typeof this.textToMatch === 'string' && elementText.includes(this.textToMatch!)) {
-          return element;
-        }
-      } else {
-        // This is returned for cases where xpath is findStrategy and we want
-        // to return the last element found in the list
-        return element;
-      }
+    for await (const element of this.matches()) {
+      return element;
     }
     return null;
   }
 
   /**
-   * Waits for the element to be visible and returns its reference id, or throws with the
-   * action's name so the failure reads as "Failed to fill: …" rather than a bare timeout.
+   * Every element this locator matches, the one `getElement()` returns first. A chained locator
+   * searches the parent's matches in turn and stops at the first whose subtree has a match after
+   * the text check, so a parent whose children all fail it does not hide the others.
+   *
+   * `everyParent` goes on through the rest of the parent's matches instead, at every level of the
+   * chain, for `displayedMatch()`: a hidden copy of the parent (a closed menu later in the page)
+   * must not stand in for the displayed one whose child is on screen. Being lazy, it only looks
+   * further while the matches so far are all hidden.
+   */
+  private async *matches(everyParent = false): AsyncGenerator<ElementReference> {
+    if (!this.parent) {
+      yield* this.matching(await this.findIn(null));
+      return;
+    }
+    for await (const root of this.parent.matches(everyParent)) {
+      let found = false;
+      for await (const element of this.matching(await this.findIn(root))) {
+        found = true;
+        yield element;
+      }
+      if (found && !everyParent) {
+        return;
+      }
+    }
+  }
+
+  /** Those of `elements` whose text passes `textToMatch`, last first. */
+  private async *matching(elements: ElementReference[]): AsyncGenerator<ElementReference> {
+    // A lone match needs no text check when the selector already matched the text. A RegExp
+    // only narrows the selector to its longest literal part, or to `//*` with none, so a lone
+    // match still has to pass the RegExp: a chained `.//*` under a one-child parent is one.
+    if (elements.length === 1 && !(this.textToMatch instanceof RegExp)) {
+      yield elements[0]!;
+      return;
+    }
+    for (const element of [...elements].reverse()) {
+      if (this.textToMatch == null) {
+        yield element;
+        continue;
+      }
+      const elementText = await this.webDriverClient.getElementText(element[ELEMENT_REFERENCE_ID]);
+      if (
+        this.textToMatch instanceof RegExp
+          ? this.textToMatch.test(elementText)
+          : elementText.includes(this.textToMatch)
+      ) {
+        yield element;
+      }
+    }
+  }
+
+  /** Asks the driver for the matches, in document order, under `root` or the whole screen. */
+  private async findIn(root: ElementReference | null): Promise<ElementReference[]> {
+    if (this.findStrategy === SCRIPT_FIND_STRATEGY) {
+      const found: ElementReference[] | null = await this.webDriverClient.executeScript(
+        this.selector,
+        [root],
+      );
+      return found ?? [];
+    }
+    if (root == null) {
+      return await this.webDriverClient.findElements(this.findStrategy, this.selector);
+    }
+    // An XPath is evaluated against the whole document even from an element unless it is
+    // relative, and a chained `getByText(/regex/)` falls back to `//*` natively.
+    const selector =
+      this.findStrategy === 'xpath' && this.selector.startsWith('//')
+        ? `.${this.selector}`
+        : this.selector;
+    return await this.webDriverClient.findElementsFromElement(
+      root[ELEMENT_REFERENCE_ID],
+      this.findStrategy,
+      selector,
+    );
+  }
+
+  /**
+   * Runs `act` on the element `requireVisibleElementId()` found. If the element went stale in
+   * between (a framework re-rendered it after the wait), waits and acts once more on the node
+   * that replaced it, as a fresh lookup per action used to do. The driver rejects a stale
+   * element before acting on it, so the action never runs twice on the page.
+   */
+  private async withVisibleElement<T>(
+    action: string,
+    options: ActionOptions | undefined,
+    act: (elementId: string) => Promise<T>,
+  ): Promise<T> {
+    try {
+      return await act(await this.requireVisibleElementId(action, options));
+    } catch (error) {
+      if (!isStaleElementError(error)) {
+        throw error;
+      }
+      return await act(await this.requireVisibleElementId(action, options));
+    }
+  }
+
+  /**
+   * Waits for the element to be visible and returns the reference id the wait found it under,
+   * or throws with the action's name so the failure reads as "Failed to fill: …" rather than a
+   * bare timeout. Finding it again would cost a second lookup per action, and on iOS every XPath
+   * lookup is a full page-source snapshot.
    */
   private async requireVisibleElementId(action: string, options?: ActionOptions): Promise<string> {
-    const isElementDisplayed = await this.isVisible(options);
-    if (!isElementDisplayed) {
-      throw new Error(`Failed to ${action}: Element "${this.selector}" not visible`);
+    let elementId: string | null;
+    try {
+      elementId = await this.waitForElementId('visible', options);
+    } catch (error) {
+      if (error instanceof TimeoutError) {
+        throw new Error(`Failed to ${action}: Element ${this.named} not visible`);
+      }
+      throw error;
     }
-    const element = await this.getElement();
-    const elementId = element?.[ELEMENT_REFERENCE_ID];
     if (!elementId) {
-      throw new Error(`Failed to ${action}: Element "${this.selector}" is not found`);
+      // Unreachable: a 'visible' wait resolves only with an element.
+      throw new Error(`Failed to ${action}: Element ${this.named} is not found`);
     }
     return elementId;
   }

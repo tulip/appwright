@@ -89,6 +89,73 @@ describe("waitFor('hidden')", () => {
   });
 });
 
+describe('timeout: 0', () => {
+  test('isVisible makes exactly one attempt instead of waiting expectTimeout', async () => {
+    const client = mockClient({ findElements: vi.fn().mockResolvedValue([]) });
+    const locator = new Locator(client, { expectTimeout: 20_000 }, '//field', 'xpath');
+    expect(await locator.isVisible({ timeout: 0 })).toBe(false);
+    expect(client.findElements).toHaveBeenCalledTimes(1);
+  });
+
+  test("waitFor('hidden') checks once, then times out", async () => {
+    const client = mockClient();
+    await expect(nativeLocator(client).waitFor('hidden', { timeout: 0 })).rejects.toThrow(
+      'Element "//field" was still on the screen after 0ms',
+    );
+    expect(client.findElements).toHaveBeenCalledTimes(1);
+    expect(client.isElementDisplayed).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('one lookup per action', () => {
+  test('acts on the element the visibility wait found', async () => {
+    const client = mockClient({
+      getElementRect: vi.fn().mockResolvedValue({ x: 0, y: 0, width: 1, height: 1 }),
+    });
+    const locator = nativeLocator(client);
+    await locator.tap();
+    expect(client.findElements).toHaveBeenCalledTimes(1);
+    expect(client.elementClick).toHaveBeenCalledWith('element-id');
+
+    await locator.boundingBox();
+    expect(client.findElements).toHaveBeenCalledTimes(2);
+  });
+
+  test('an element re-rendered after the wait is found again, once', async () => {
+    class StaleError extends Error {
+      name = 'stale element reference';
+    }
+    const fresh = { [ELEMENT_REFERENCE_ID]: 'fresh-id' };
+    const client = mockClient({
+      findElements: vi.fn().mockResolvedValueOnce([ELEMENT]).mockResolvedValue([fresh]),
+      elementClick: vi
+        .fn()
+        .mockImplementation(async (id: string) =>
+          id === 'element-id' ? Promise.reject(new StaleError('gone')) : undefined,
+        ),
+    });
+    await nativeLocator(client).tap();
+    expect(calls(client.elementClick)).toEqual([['element-id'], ['fresh-id']]);
+    expect(client.findElements).toHaveBeenCalledTimes(2);
+
+    const stillStale = mockClient({
+      elementClick: vi.fn().mockRejectedValue(new StaleError('gone')),
+    });
+    await expect(nativeLocator(stillStale).tap()).rejects.toThrow('gone');
+    expect(stillStale.elementClick).toHaveBeenCalledTimes(2);
+  });
+
+  test('a chained locator looks its parent up once too', async () => {
+    const client = mockClient({
+      findElementsFromElement: vi.fn().mockResolvedValue([{ [ELEMENT_REFERENCE_ID]: 'child' }]),
+    });
+    await nativeLocator(client).getByText('Save').tap();
+    expect(client.findElements).toHaveBeenCalledTimes(1);
+    expect(client.findElementsFromElement).toHaveBeenCalledTimes(1);
+    expect(client.elementClick).toHaveBeenCalledWith('child');
+  });
+});
+
 describe('fill', () => {
   test('native Android: clears, types, reads back — without tapping, so no keyboard', async () => {
     const client = mockClient({
@@ -286,5 +353,101 @@ describe('clear / press / inputValue', () => {
 
     attributes.text = 'typed';
     expect(await locator.inputValue()).toBe('typed');
+  });
+});
+
+describe('boundingBox', () => {
+  test("returns the displayed element's rectangle after one lookup", async () => {
+    const client = mockClient({
+      getElementRect: vi.fn().mockResolvedValue({ x: 12, y: 340, width: 378, height: 44 }),
+    });
+    expect(await nativeLocator(client).boundingBox()).toEqual({
+      x: 12,
+      y: 340,
+      width: 378,
+      height: 44,
+    });
+    expect(client.getElementRect).toHaveBeenCalledWith('element-id');
+    expect(client.findElements).toHaveBeenCalledTimes(1);
+  });
+
+  test('returns null, as Playwright does, when the element is hidden, without waiting', async () => {
+    const client = mockClient({
+      isElementDisplayed: vi.fn().mockResolvedValue(false),
+      getElementRect: vi.fn(),
+    });
+    expect(await webLocator(client).boundingBox({ timeout: 20_000 })).toBeNull();
+    expect(client.findElements).toHaveBeenCalledTimes(1);
+    expect(client.getElementRect).not.toHaveBeenCalled();
+  });
+
+  test('measures the displayed match, not a hidden one later in the page', async () => {
+    const client = mockClient({
+      findElements: vi
+        .fn()
+        .mockResolvedValue([
+          { [ELEMENT_REFERENCE_ID]: 'shown' },
+          { [ELEMENT_REFERENCE_ID]: 'hidden' },
+        ]),
+      isElementDisplayed: vi.fn().mockImplementation(async (id: string) => id === 'shown'),
+      getElementRect: vi.fn().mockResolvedValue({ x: 1, y: 2, width: 3, height: 4 }),
+    });
+    expect(await nativeLocator(client).boundingBox()).toEqual({ x: 1, y: 2, width: 3, height: 4 });
+    expect(calls(client.getElementRect)).toEqual([['shown']]);
+  });
+
+  test('waits for something to match before measuring it', async () => {
+    const client = mockClient({
+      findElements: vi.fn().mockResolvedValueOnce([]).mockResolvedValue([ELEMENT]),
+      getElementRect: vi.fn().mockResolvedValue({ x: 1, y: 2, width: 3, height: 4 }),
+    });
+    expect(await nativeLocator(client).boundingBox()).toEqual({ x: 1, y: 2, width: 3, height: 4 });
+    expect(client.findElements).toHaveBeenCalledTimes(2);
+  });
+
+  test('waits for a match, then throws, naming the element, when none appears', async () => {
+    const client = mockClient({
+      findElements: vi.fn().mockResolvedValue([]),
+      getElementRect: vi.fn(),
+    });
+    await expect(webLocator(client).boundingBox({ timeout: 10 })).rejects.toThrow(
+      'Failed to boundingBox: Element "#field" is not found',
+    );
+    expect(client.getElementRect).not.toHaveBeenCalled();
+  });
+});
+
+describe('a hidden match later in the document', () => {
+  const SHOWN = { [ELEMENT_REFERENCE_ID]: 'shown' };
+  const HIDDEN = { [ELEMENT_REFERENCE_ID]: 'hidden' };
+  const displayed = () => vi.fn().mockImplementation(async (id: string) => id === 'shown');
+
+  test('does not stand in for the displayed one an action is for', async () => {
+    const client = mockClient({
+      findElements: vi.fn().mockResolvedValue([SHOWN, HIDDEN]),
+      isElementDisplayed: displayed(),
+    });
+    await nativeLocator(client).tap({ timeout: 0 });
+    expect(client.elementClick).toHaveBeenCalledWith('shown');
+  });
+
+  test("does not make the locator 'hidden' while another match is displayed", async () => {
+    const client = mockClient({
+      findElements: vi.fn().mockResolvedValue([SHOWN, HIDDEN]),
+      isElementDisplayed: displayed(),
+    });
+    await expect(nativeLocator(client).waitFor('hidden', { timeout: 0 })).rejects.toThrow(
+      TimeoutError,
+    );
+    expect(await nativeLocator(client).isVisible({ timeout: 0 })).toBe(true);
+  });
+
+  test("'hidden' holds once every match is hidden", async () => {
+    const client = mockClient({
+      findElements: vi.fn().mockResolvedValue([HIDDEN, HIDDEN]),
+      isElementDisplayed: displayed(),
+    });
+    await nativeLocator(client).waitFor('hidden', { timeout: 0 });
+    expect(client.isElementDisplayed).toHaveBeenCalledTimes(2);
   });
 });
