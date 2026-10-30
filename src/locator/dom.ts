@@ -130,10 +130,24 @@ export function queryDom(root: Element | null, query: DomQuery): Element[] {
     return parent && parent.host ? parent.host : null;
   }
 
-  /** A light-DOM child of an open shadow host that no `<slot>` takes is not rendered at all. */
-  function isUnslotted(el: Element): boolean {
+  /**
+   * Not rendered at all, though no style hides it: a light-DOM child of an open shadow host that
+   * no `<slot>` takes, or a slot's fallback content while the slot has nodes assigned.
+   */
+  function isNotRendered(el: Element): boolean {
     const parent = el.parentElement;
-    return !!(parent && parent.shadowRoot && !el.assignedSlot);
+    if (!parent) {
+      return false;
+    }
+    if (parent.shadowRoot && !el.assignedSlot) {
+      return true;
+    }
+    const slot = parent as HTMLSlotElement;
+    return (
+      tagOf(parent) === 'SLOT' &&
+      typeof slot.assignedNodes === 'function' &&
+      slot.assignedNodes().length > 0
+    );
   }
 
   /**
@@ -147,7 +161,7 @@ export function queryDom(root: Element | null, query: DomQuery): Element[] {
         hidden =
           node.getAttribute('aria-hidden') === 'true' ||
           getComputedStyle(node).display === 'none' ||
-          isUnslotted(node);
+          isNotRendered(node);
         hiddenCache.set(node, hidden);
       }
       if (hidden) {

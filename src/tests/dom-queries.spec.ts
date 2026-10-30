@@ -204,6 +204,35 @@ describe('getByRole in a WebView', () => {
       expect(ids(byRole('button', { name: 'Close' }))).toEqual(['native']);
     });
 
+    /**
+     * happy-dom assigns nodes to slots but leaves `assignedSlot` unset, which would make every
+     * slotted element read as unslotted; WebViews set it, so the fixture does.
+     */
+    function assignTo(el: Element, slot: Element) {
+      Object.defineProperty(el, 'assignedSlot', { value: slot, configurable: true });
+    }
+
+    test('a light-DOM control a slot takes is visible', () => {
+      render('<x-row id="row"><button id="light">Edit</button></x-row>');
+      const shadow = upgrade('row', '<div><slot></slot></div>');
+      assignTo(document.getElementById('light')!, shadow.querySelector('slot')!);
+      expect(ids(byRole('button', { name: 'Edit' }))).toEqual(['light']);
+    });
+
+    test('a light-DOM control slotted into a hidden part of the shadow tree is hidden', () => {
+      render('<x-row id="row"><button id="light">Edit</button></x-row>');
+      const shadow = upgrade('row', '<div style="display: none"><slot></slot></div>');
+      assignTo(document.getElementById('light')!, shadow.querySelector('slot')!);
+      expect(ids(byRole('button', { name: 'Edit' }))).toEqual([]);
+    });
+
+    test("a slot's fallback content is rendered only while nothing is assigned", () => {
+      render('<x-a id="empty"></x-a><x-a id="filled"><span>Assigned</span></x-a>');
+      upgrade('empty', '<slot><button id="shown-fallback">Default</button></slot>');
+      upgrade('filled', '<slot><button id="replaced-fallback">Default</button></slot>');
+      expect(ids(byRole('button', { name: 'Default' }))).toEqual(['shown-fallback']);
+    });
+
     test('a button inside a hidden host is hidden', () => {
       render('<div style="display: none"><x-toolbar id="bar"></x-toolbar></div>');
       upgrade('bar', '<button id="native">Save</button>');
