@@ -381,6 +381,30 @@ describe('boundingBox', () => {
     expect(client.getElementRect).not.toHaveBeenCalled();
   });
 
+  test('measures the displayed match, not a hidden one later in the page', async () => {
+    const client = mockClient({
+      findElements: vi
+        .fn()
+        .mockResolvedValue([
+          { [ELEMENT_REFERENCE_ID]: 'shown' },
+          { [ELEMENT_REFERENCE_ID]: 'hidden' },
+        ]),
+      isElementDisplayed: vi.fn().mockImplementation(async (id: string) => id === 'shown'),
+      getElementRect: vi.fn().mockResolvedValue({ x: 1, y: 2, width: 3, height: 4 }),
+    });
+    expect(await nativeLocator(client).boundingBox()).toEqual({ x: 1, y: 2, width: 3, height: 4 });
+    expect(calls(client.getElementRect)).toEqual([['shown']]);
+  });
+
+  test('waits for something to match before measuring it', async () => {
+    const client = mockClient({
+      findElements: vi.fn().mockResolvedValueOnce([]).mockResolvedValue([ELEMENT]),
+      getElementRect: vi.fn().mockResolvedValue({ x: 1, y: 2, width: 3, height: 4 }),
+    });
+    expect(await nativeLocator(client).boundingBox()).toEqual({ x: 1, y: 2, width: 3, height: 4 });
+    expect(client.findElements).toHaveBeenCalledTimes(2);
+  });
+
   test('waits for a match, then throws, naming the element, when none appears', async () => {
     const client = mockClient({
       findElements: vi.fn().mockResolvedValue([]),

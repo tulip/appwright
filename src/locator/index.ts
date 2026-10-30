@@ -341,14 +341,15 @@ export class Locator {
   }
 
   /**
-   * The reference id of the first displayed element among `matches()` — the last displayed one
-   * in document order — or `null` when elements match but none is displayed, or `undefined` when
-   * none matches. Each match costs a display check until one passes, so a locator with many
-   * hidden matches costs one check per match per poll.
+   * The reference id of the first displayed element among `matches(true)` — the last displayed
+   * one in document order, under any of a chained locator's parent matches — or `null` when
+   * elements match but none is displayed, or `undefined` when none matches. Each match costs a
+   * display check until one passes, so a locator with many hidden matches costs one check per
+   * match per poll.
    */
   private async displayedMatch(): Promise<string | null | undefined> {
     let matched = false;
-    for await (const element of this.matches()) {
+    for await (const element of this.matches(true)) {
       const elementId = element[ELEMENT_REFERENCE_ID];
       if (!elementId) {
         continue;
@@ -514,19 +515,24 @@ export class Locator {
    * Every element this locator matches, the one `getElement()` returns first. A chained locator
    * searches the parent's matches in turn and stops at the first whose subtree has a match after
    * the text check, so a parent whose children all fail it does not hide the others.
+   *
+   * `everyParent` goes on through the rest of the parent's matches instead, at every level of the
+   * chain, for `displayedMatch()`: a hidden copy of the parent (a closed menu later in the page)
+   * must not stand in for the displayed one whose child is on screen. Being lazy, it only looks
+   * further while the matches so far are all hidden.
    */
-  private async *matches(): AsyncGenerator<ElementReference> {
+  private async *matches(everyParent = false): AsyncGenerator<ElementReference> {
     if (!this.parent) {
       yield* this.matching(await this.findIn(null));
       return;
     }
-    for await (const root of this.parent.matches()) {
+    for await (const root of this.parent.matches(everyParent)) {
       let found = false;
       for await (const element of this.matching(await this.findIn(root))) {
         found = true;
         yield element;
       }
-      if (found) {
+      if (found && !everyParent) {
         return;
       }
     }

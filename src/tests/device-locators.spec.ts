@@ -124,12 +124,17 @@ describe('getByText', () => {
     );
   });
 
-  test('a case-insensitive RegExp is not narrowed to a case-sensitive substring', () => {
-    for (const isAndroid of [true, false]) {
-      const locator = device(isAndroid).getByText(/(save)/i);
-      expect(compiled(locator)).toEqual({ selector: '//*', findStrategy: 'xpath' });
-      expect((locator as unknown as { textToMatch: RegExp }).textToMatch).toEqual(/(save)/i);
-    }
+  test('a case-insensitive RegExp is narrowed case-insensitively, then tested as is', () => {
+    const android = device(true).getByText(/(save)/i);
+    expect(compiled(android)).toEqual({
+      selector: 'textMatches("(?is).*save.*")',
+      findStrategy: '-android uiautomator',
+    });
+    expect((android as unknown as { textToMatch: RegExp }).textToMatch).toEqual(/(save)/i);
+    expect(compiled(device(false).getByText(/(save)/i))).toEqual({
+      selector: 'label CONTAINS[c] "save"',
+      findStrategy: '-ios predicate string',
+    });
   });
 });
 

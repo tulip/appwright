@@ -115,6 +115,25 @@ describe('chaining native locators', () => {
     expect(found).toEqual([el('b'), el('b'), el('b'), el('b')]);
   });
 
+  test("a hidden copy of the parent later in the page does not hide the displayed one's child", async () => {
+    const client = mockClient({
+      findElements: vi.fn().mockResolvedValue([el('open-menu'), el('closed-copy')]),
+      findElementsFromElement: vi
+        .fn()
+        .mockImplementation(async (root: string) => [el(`${root}/device`)]),
+      isElementDisplayed: vi
+        .fn()
+        .mockImplementation(async (id: string) => id === 'open-menu/device'),
+    });
+    const item = device(client).getById('menu').getByText('Device');
+
+    await item.tap({ timeout: 0 });
+    expect(client.elementClick).toHaveBeenCalledWith('open-menu/device');
+    await expect(item.waitFor('hidden', { timeout: 0 })).rejects.toThrow('was still on the screen');
+    // getElement() still stops at the first parent match holding one: the last in the page.
+    expect(await item.getElement()).toEqual(el('closed-copy/device'));
+  });
+
   test('no parent match means no child match, without looking further', async () => {
     const client = mockClient({ findElements: vi.fn().mockResolvedValue([]) });
     await device(client).getById('dialog').getByText('OK').waitFor('hidden');

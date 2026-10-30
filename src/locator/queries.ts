@@ -52,14 +52,21 @@ export function nativeTextQuery(
     if (text.global || text.sticky) {
       text = new RegExp(text.source, text.flags.replace(/[gy]/g, ''));
     }
-    // `textContains` and `CONTAINS` compare case-sensitively, so an `i` RegExp is not narrowed:
-    // `/(save)/i` narrowed to "save" would never see "Save".
-    const substringForContains = text.ignoreCase ? undefined : longestDeterministicGroup(text);
+    const substringForContains = longestDeterministicGroup(text);
     if (!substringForContains) {
       return { selector: '//*', findStrategy: 'xpath', textToMatch: text };
     }
+    // The substring holds no regex metacharacters (see `longestDeterministicGroup`), so it reads
+    // literally inside `textMatches` as well.
     const quoted = escapeQuotes(substringForContains);
-    const selector = isAndroid ? `textContains("${quoted}")` : `label CONTAINS "${quoted}"`;
+    let selector: string;
+    if (text.ignoreCase) {
+      // `textContains` and `CONTAINS` compare case-sensitively: narrowed with them, `/(save)/i`
+      // would never see "Save". `(?is)` also lets `.*` span a multi-line text.
+      selector = isAndroid ? `textMatches("(?is).*${quoted}.*")` : `label CONTAINS[c] "${quoted}"`;
+    } else {
+      selector = isAndroid ? `textContains("${quoted}")` : `label CONTAINS "${quoted}"`;
+    }
     return { selector, findStrategy: strategyFor(isAndroid), textToMatch: text };
   }
   const quoted = escapeQuotes(text);
