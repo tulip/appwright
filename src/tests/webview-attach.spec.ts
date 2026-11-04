@@ -693,6 +693,94 @@ describe('a closed window', () => {
     expect(await evaluated).toBe('ran');
     expect(switches(client)).toEqual([`WEBVIEW_${APP}`, 'NATIVE_APP', `WEBVIEW_${APP}`]);
   });
+
+  const ELEMENT = { 'element-6066-11e4-a52e-4f735466cecf': 'el' };
+
+  /** A page with one displayed button, found by a role query's in-page script. */
+  function buttonPage(client: MockClient) {
+    const executeScript = (client.executeScript as Mock).getMockImplementation()!;
+    const find = vi.fn().mockResolvedValue([ELEMENT]);
+    (client.executeScript as Mock).mockImplementation(async (body: string, args: unknown[]) =>
+      body.includes('querySelectorAll') ? find() : executeScript(body, args),
+    );
+    Object.assign(client, {
+      isElementDisplayed: vi.fn().mockResolvedValue(true),
+      elementClick: vi.fn().mockResolvedValue(undefined),
+      getElementText: vi.fn().mockResolvedValue('Save'),
+    });
+    return find;
+  }
+
+  test("found by a locator's wait, binds the WebView again and taps", async () => {
+    const client = mockClient();
+    const find = buttonPage(client);
+    // The wait's first lookup lands on a window that has just closed.
+    find.mockRejectedValueOnce(CLOSED);
+    vi.useFakeTimers();
+    const tapped = webView(client).getByRole('button', { name: 'Save' }).tap();
+    await vi.runAllTimersAsync();
+    await tapped;
+    expect(switches(client)).toEqual([`WEBVIEW_${APP}`, 'NATIVE_APP', `WEBVIEW_${APP}`]);
+    expect(client.elementClick).toHaveBeenCalledTimes(1);
+    expect(client.elementClick).toHaveBeenCalledWith('el');
+  });
+
+  test('closed by the tap itself, counts the tap as done without tapping again', async () => {
+    const client = mockClient();
+    buttonPage(client);
+    (client.elementClick as Mock).mockRejectedValue(CLOSED);
+    await webView(client).getByRole('button', { name: 'Close' }).tap();
+    expect(client.elementClick).toHaveBeenCalledTimes(1);
+    expect(switches(client)).not.toContain('NATIVE_APP');
+  });
+
+  test('closed while another action ran fails it without running it again', async () => {
+    const client = mockClient();
+    buttonPage(client);
+    (client.getElementText as Mock).mockRejectedValue(CLOSED);
+    await expect(webView(client).getByRole('button', { name: 'Save' }).getText()).rejects.toThrow(
+      'Failed to getText: Element getByRole("button", { name: "Save" })\'s window closed while the action ran',
+    );
+    expect(client.getElementText).toHaveBeenCalledTimes(1);
+    expect(switches(client)).not.toContain('NATIVE_APP');
+  });
+
+  test('that attach() chose, gone by the next call after a native step, fails saying so', async () => {
+    const pages: Record<string, string> = {
+      'CDwindow-1': 'https://app.example.com/',
+      'CDwindow-2': 'https://idp.example.com/popup',
+    };
+    const client = mockClient({ pages });
+    const view = webView(client);
+    await view.attach({ pageUrl: '/popup' });
+    // A native step (polling `device.webPages()` until the popup is gone) leaves the WebView.
+    await client.switchAppiumContext('NATIVE_APP');
+    delete pages['CDwindow-2'];
+
+    await expect(view.evaluate('return document.title')).rejects.toThrow(
+      /^WEBVIEW_com\.example\.app, which attach\(\) bound, cannot be bound again: its window CDwindow-2 is closed .* Call webView\.attach\(\)/,
+    );
+    // Forgotten, so the call after the error discovers a WebView again.
+    expect(await view.evaluate('return 1')).toBeUndefined();
+    expect(switches(client).at(-1)).toBe(`WEBVIEW_${APP}`);
+  });
+
+  test("a page script's own error that says so is not a closed window", async () => {
+    const client = mockClient();
+    const thrown = new Error('javascript error: Server said: no such window');
+    const executeScript = (client.executeScript as Mock).getMockImplementation()!;
+    (client.executeScript as Mock).mockImplementation(async (body: string, args: unknown[]) => {
+      if (body === 'return openPopup()') {
+        throw thrown;
+      }
+      return executeScript(body, args);
+    });
+    await expect(webView(client).evaluate('return openPopup()')).rejects.toBe(thrown);
+    const runs = (client.executeScript as Mock).mock.calls.filter(
+      (c) => c[0] === 'return openPopup()',
+    );
+    expect(runs).toHaveLength(1);
+  });
 });
 
 describe('errors from a WebView locator', () => {

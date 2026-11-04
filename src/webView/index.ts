@@ -1,6 +1,6 @@
 import retry from 'async-retry';
 
-import { Device } from '../device';
+import { Device, runScriptQuietly } from '../device';
 import { devToolsPageId } from '../device/web-pages';
 import { CHAIN_METHODS, Locator } from '../locator';
 import {
@@ -72,6 +72,13 @@ const CONTEXTS_SETTLE_WINDOW_MS = 5_000;
 const CONTEXTS_SETTLE_SAMPLE_MS = 1_000;
 
 /**
+ * Why `switchToAttached()` could not bind what `attach()` bound. `windowClosed` tells a closed
+ * window, which the caller is told about, from a context that left the front or is no longer
+ * listed, after which discovery takes over.
+ */
+type AttachedGone = { why: string; windowClosed: boolean };
+
+/**
  * How long discovery keeps retrying while a browser is in front before it fails with the hint to
  * `attach({ context })`: long enough for a closing Custom Tab to hand the front back to the app.
  */
@@ -109,7 +116,8 @@ export class WebView {
    * Ensures we're in WEBVIEW context before any operation.
    * If not in a WEBVIEW context, binds what `attach()` bound while it lasts, else discovers and
    * switches to the first available one. A bound browser that is no longer in front is left the
-   * same way (see `ANDROID_BROWSER_CONTEXTS`).
+   * same way (see `ANDROID_BROWSER_CONTEXTS`). A window `attach()` chose that has closed is not
+   * replaced by discovery's: the call fails, saying to attach again, as recovery does.
    */
   private async ensureWebViewContext(): Promise<void> {
     const currentContext = await this.device.getCurrentContext();
@@ -127,14 +135,21 @@ export class WebView {
       if (left == null) {
         return;
       }
-      console.log(`[WebView] Leaving ${currentContext}: ${left}.`);
+      if (left.windowClosed) {
+        throw this.attachedGone(bound, left);
+      }
+      console.log(`[WebView] Leaving ${currentContext}: ${left.why}.`);
     } else if (this.attached != null) {
-      const gone = await this.switchToAttached(this.attached);
+      const attached = this.attached;
+      const gone = await this.switchToAttached(attached);
       if (gone == null) {
         return;
       }
+      if (gone.windowClosed) {
+        throw this.attachedGone(attached, gone);
+      }
       console.log(
-        `[WebView] Not returning to ${this.attached.context}, which attach() bound: ${gone}. ` +
+        `[WebView] Not returning to ${attached.context}, which attach() bound: ${gone.why}. ` +
           'Discovering a WebView instead.',
       );
     }
@@ -155,7 +170,10 @@ export class WebView {
       return false;
     }
     try {
-      return (await this.device.runScript<string>('return document.visibilityState')) !== 'visible';
+      return (
+        (await runScriptQuietly<string>(this.device, 'return document.visibilityState')) !==
+        'visible'
+      );
     } catch {
       return true;
     }
@@ -188,25 +206,43 @@ export class WebView {
    * cannot, the session is left in NATIVE_APP, so the next `webView` call discovers a WebView
    * rather than run in whatever window the context fell back to.
    */
-  private async switchToAttached(attached: AttachedPage): Promise<string | undefined> {
+  private async switchToAttached(attached: AttachedPage): Promise<AttachedGone | undefined> {
     const left = await this.leftFront(attached.context);
     if (left != null) {
-      return left;
+      return { why: left, windowClosed: false };
     }
     const listed = (await this.device.contexts()).map(contextName);
     if (!listed.includes(attached.context)) {
-      return `Appium no longer lists it (contexts: ${JSON.stringify(listed)})`;
+      return {
+        why: `Appium no longer lists it (contexts: ${JSON.stringify(listed)})`,
+        windowClosed: false,
+      };
     }
     await this.device.switchContext(attached.context);
     if (attached.window != null) {
       const windows = await this.device.getWindowHandles();
       if (!windows.includes(attached.window)) {
         await this.device.switchContext(NATIVE_CONTEXT);
-        return `its window ${attached.window} is closed (windows: ${JSON.stringify(windows)})`;
+        return {
+          why: `its window ${attached.window} is closed (windows: ${JSON.stringify(windows)})`,
+          windowClosed: true,
+        };
       }
       await this.device.switchToWindow(attached.window);
     }
     return undefined;
+  }
+
+  /**
+   * The error for a page `attach()` bound that cannot be bound again, after forgetting it, so the
+   * call after the error discovers a WebView. `cause`, when given, opens the message.
+   */
+  private attachedGone(attached: AttachedPage, gone: AttachedGone, cause?: string): Error {
+    this.attached = undefined;
+    return new Error(
+      `${cause != null ? `${cause}, and ` : ''}${attached.context}, which attach() bound, ` +
+        `cannot be bound again: ${gone.why}. Call webView.attach() to bind the page to use now.`,
+    );
   }
 
   /**
@@ -224,7 +260,9 @@ export class WebView {
    * after `attach({ context })` names it. What `attach()` bound stays bound across native
    * `device` calls, which switch to NATIVE_APP, for as long as its context (and on Android its
    * window) lasts and, for a browser, while the browser stays in front. After that the next
-   * `webView` call logs why and discovers a WebView again.
+   * `webView` call logs why and discovers a WebView again — except when only the window `page`
+   * or `pageUrl` chose has closed: then it fails, saying to call `attach()` again, rather than run
+   * on whichever window the context falls back to.
    *
    * **Usage:**
    * ```js
@@ -463,11 +501,7 @@ export class WebView {
     }
     const gone = await this.switchToAttached(attached);
     if (gone != null) {
-      this.attached = undefined;
-      throw new Error(
-        `${cause}, and ${attached.context}, which attach() bound, cannot be bound again: ` +
-          `${gone}. Call webView.attach() to bind the page to use now.`,
-      );
+      throw this.attachedGone(attached, gone, cause);
     }
   }
 

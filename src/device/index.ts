@@ -1526,15 +1526,6 @@ export class Device {
   }
 
   /**
-   * Runs `script` in the current context without a report step, for appwright's own checks
-   * between the steps a test takes.
-   * @internal
-   */
-  async runScript<T = any>(script: string): Promise<T> {
-    return await this.webDriverClient.executeScript(script, []);
-  }
-
-  /**
    * The native view hierarchy as XML — UiAutomator2's dump on Android, XCUITest's on iOS — for
    * finding the attributes a locator can match on. Read from NATIVE_APP whatever context is
    * active, then switched back, so a call between two `webView` steps leaves the WebView bound.
@@ -1650,4 +1641,13 @@ export class Device {
       await delay(pollInterval);
     }
   }
+}
+
+/**
+ * Runs `script` in `device`'s current context without a report step, for appwright's own checks
+ * between the steps a test takes. A function, not a `Device` method, so that it stays out of the
+ * public typings: the package exports `Device` from this module and nothing else.
+ */
+export async function runScriptQuietly<T = unknown>(device: Device, script: string): Promise<T> {
+  return await device['webDriverClient'].executeScript(script, []);
 }

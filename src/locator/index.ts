@@ -17,8 +17,9 @@ import {
   TimeoutOptions,
   WebDriverErrors,
 } from '../types';
+import { logger } from '../logger';
 import { RetryableError, TimeoutError } from '../types/errors';
-import { boxedStep, isInvalidSessionError, isNoSuchWindowError } from '../utils';
+import { boxedStep, errorMessage, isInvalidSessionError, isNoSuchWindowError } from '../utils';
 import {
   LocatorQuery,
   nativeIdQuery,
@@ -418,7 +419,21 @@ export class Locator {
   @boxedStep
   async tap(options?: ActionOptions) {
     return await this.withVisibleElement('tap', options, async (elementId) => {
-      await this.webDriverClient.elementClick(elementId);
+      try {
+        await this.webDriverClient.elementClick(elementId);
+      } catch (error) {
+        // A tap that closes its own window — a popup's Close or Submit calling `window.close()`.
+        // Chrome on an Android emulator answers that click before the window goes (checked), and
+        // the next `webView` call reports the closed window. Should the close win the race,
+        // chromedriver answers `no such window`: as with Playwright's click on a page that
+        // closes, the tap is done, and retrying it would tap another page. Matched on the
+        // driver's error (see `isNoSuchWindowError()`), so a window that closed just before the
+        // click landed is taken as done too.
+        if (!isNoSuchWindowError(error)) {
+          throw error;
+        }
+        logger.log(`tap(): ${this.named}'s window closed as it was tapped; the tap is done.`);
+      }
     });
   }
 
@@ -599,13 +614,31 @@ export class Locator {
     options: ActionOptions | undefined,
     act: (elementId: string) => Promise<T>,
   ): Promise<T> {
+    const actOn = async (elementId: string) => {
+      try {
+        return await act(elementId);
+      } catch (error) {
+        // The window closed while the action ran on it: most likely the action closed it. The
+        // error is a new one so the WebView's window-closure recovery does not run the action
+        // again on another page. A closed window found by the wait, before acting, is left as
+        // the driver's error, for that recovery to bind the WebView again and retry.
+        if (isNoSuchWindowError(error)) {
+          // Not the driver's text, which would read as a closed window to that recovery.
+          throw new Error(
+            `Failed to ${action}: Element ${this.named}'s window closed while the action ran, ` +
+              'probably closed by the action itself. Call webView.attach() to bind the page to use now.',
+          );
+        }
+        throw error;
+      }
+    };
     try {
-      return await act(await this.requireVisibleElementId(action, options));
+      return await actOn(await this.requireVisibleElementId(action, options));
     } catch (error) {
       if (!isStaleElementError(error)) {
         throw error;
       }
-      return await act(await this.requireVisibleElementId(action, options));
+      return await actOn(await this.requireVisibleElementId(action, options));
     }
   }
 

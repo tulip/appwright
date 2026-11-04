@@ -170,7 +170,22 @@ export function escapeRegExp(value: string): string {
 export const delay = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
+/**
+ * A page script's own error (`javascript error`), which never stands for a driver condition,
+ * whatever its text says: `evaluate()` recovers from a closed window and a renderer drop by
+ * running the script again, and a script whose backend said "no such window" or "invalid
+ * session id" must not run again.
+ */
+function isPageScriptError(error: unknown): boolean {
+  const code = 'javascript error';
+  const name = (error as { name?: unknown } | null)?.name;
+  return (typeof name === 'string' && name.includes(code)) || errorMessage(error).startsWith(code);
+}
+
 export function isNoSuchWindowError(error: unknown): boolean {
+  if (isPageScriptError(error)) {
+    return false;
+  }
   if (error instanceof Error) {
     if (error.name && error.name.toLowerCase().includes('nosuchwindowerror')) {
       return true;
@@ -200,21 +215,15 @@ export function errorMessage(error: unknown): string {
  * Whether the driver rejected the command because the session behind the current context is
  * gone. webdriver names its errors after their W3C code; the message is checked too, as it
  * carries the same code whenever a proxy (Appium in front of chromedriver) rebuilt the error.
- * A page script's own error (`javascript error`) never counts, whatever its text says: a page
- * that throws "invalid session id" from its backend must not have its script run again.
+ * A page script's own error never counts (see `isPageScriptError()`).
  */
 export function isInvalidSessionError(error: unknown): boolean {
   const code = 'invalid session id';
-  const scriptError = 'javascript error';
   const name = (error as { name?: unknown } | null)?.name;
   if (typeof name === 'string' && name.includes(code)) {
     return true;
   }
-  const message = errorMessage(error);
-  if ((typeof name === 'string' && name.includes(scriptError)) || message.startsWith(scriptError)) {
-    return false;
-  }
-  return message.includes(code);
+  return !isPageScriptError(error) && errorMessage(error).includes(code);
 }
 
 /** Whether `url` contains `pattern`, or matches it when it is a RegExp. */
