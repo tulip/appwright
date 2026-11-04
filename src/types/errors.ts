@@ -19,3 +19,15 @@ export class NonRetryableError extends Error {
     this.name = name || 'NonRetryableError';
   }
 }
+
+/**
+ * An action's window closed while the action ran on it, most likely closed by the action itself.
+ * Never a closed window to the WebView's recovery (see `isNoSuchWindowError()`), whatever its
+ * message quotes, so the action is not run again on another page. `cause` is the driver's error.
+ */
+export class ActionWindowClosedError extends Error {
+  constructor(message: string, readonly cause: unknown) {
+    super(message);
+    this.name = 'ActionWindowClosedError';
+  }
+}

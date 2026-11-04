@@ -18,7 +18,7 @@ import {
   WebDriverErrors,
 } from '../types';
 import { logger } from '../logger';
-import { RetryableError, TimeoutError } from '../types/errors';
+import { ActionWindowClosedError, RetryableError, TimeoutError } from '../types/errors';
 import { boxedStep, errorMessage, isInvalidSessionError, isNoSuchWindowError } from '../utils';
 import {
   LocatorQuery,
@@ -618,15 +618,15 @@ export class Locator {
       try {
         return await act(elementId);
       } catch (error) {
-        // The window closed while the action ran on it: most likely the action closed it. The
-        // error is a new one so the WebView's window-closure recovery does not run the action
-        // again on another page. A closed window found by the wait, before acting, is left as
+        // The window closed while the action ran on it: most likely the action closed it. As an
+        // `ActionWindowClosedError` it is not a closed window to the WebView's window-closure
+        // recovery, which would run the action again on another page. A closed window found by the wait, before acting, is left as
         // the driver's error, for that recovery to bind the WebView again and retry.
         if (isNoSuchWindowError(error)) {
-          // Not the driver's text, which would read as a closed window to that recovery.
-          throw new Error(
+          throw new ActionWindowClosedError(
             `Failed to ${action}: Element ${this.named}'s window closed while the action ran, ` +
               'probably closed by the action itself. Call webView.attach() to bind the page to use now.',
+            error,
           );
         }
         throw error;

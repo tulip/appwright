@@ -31,3 +31,13 @@ test("a group a match can skip is never picked", () => {
   expect(longestDeterministicGroup(/(Draft )?(Saved)/)).toBe("Saved");
   expect(longestDeterministicGroup(/(Saved)+ at/)).toBe("Saved");
 });
+
+test("a group nested in another, which a match can skip with its parent, is never picked", () => {
+  expect(longestDeterministicGroup(/(?:Re: (?:Fwd: )?(Draft))?Saved/)).toBe(undefined);
+  expect(longestDeterministicGroup(/(?:(a)?(Draft))?Saved/)).toBe(undefined);
+  // Inside a lookahead the text is not part of the match at all.
+  expect(longestDeterministicGroup(/^(?!(?:x)*(Draft))Saved/)).toBe(undefined);
+  // Escaped parentheses and character classes are not groups.
+  expect(longestDeterministicGroup(/\(note\) (Saved)/)).toBe("Saved");
+  expect(longestDeterministicGroup(/[(](Saved)[)]/)).toBe("Saved");
+});

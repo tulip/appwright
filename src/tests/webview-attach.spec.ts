@@ -3,7 +3,7 @@ import { afterEach, describe, expect, Mock, test, vi } from 'vitest';
 import { Client as WebDriverClient } from 'webdriver';
 
 import { Device } from '../device';
-import { TimeoutError } from '../types/errors';
+import { ActionWindowClosedError, TimeoutError } from '../types/errors';
 import { displayUrl, urlMatches } from '../utils';
 import { WebView } from '../webView';
 
@@ -741,6 +741,20 @@ describe('a closed window', () => {
     await expect(webView(client).getByRole('button', { name: 'Save' }).getText()).rejects.toThrow(
       'Failed to getText: Element getByRole("button", { name: "Save" })\'s window closed while the action ran',
     );
+    expect(client.getElementText).toHaveBeenCalledTimes(1);
+    expect(switches(client)).not.toContain('NATIVE_APP');
+  });
+
+  test('closed during an action on text that says "no such window" is still not retried', async () => {
+    const client = mockClient();
+    buttonPage(client);
+    (client.getElementText as Mock).mockRejectedValue(CLOSED);
+    const error = await webView(client)
+      .getByText('No such window')
+      .getText()
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ActionWindowClosedError);
+    expect((error as ActionWindowClosedError).cause).toBe(CLOSED);
     expect(client.getElementText).toHaveBeenCalledTimes(1);
     expect(switches(client)).not.toContain('NATIVE_APP');
   });

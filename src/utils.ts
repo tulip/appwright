@@ -4,6 +4,7 @@ import path from 'path';
 import test from '@playwright/test';
 
 import { resolveOutputDir, VIDEOS_STORE_DIR } from './run-name';
+import { ActionWindowClosedError } from './types/errors';
 
 /**
  * Whether any argument asks for its companions to be hidden from the step title. `fill(value,
@@ -121,36 +122,44 @@ export function getLatestBuildToolsVersions(versions: string[]): string | undefi
 /**
  * The longest literal capture group of `pattern` that every match must contain, for a driver
  * search to be narrowed to; `undefined` when there is none. A group a match can skip is never
- * picked: with an alternation anywhere in `pattern` (`/(Save)|(Discard)/` matches without
- * "Discard"), or a quantifier that allows zero right after the group (`?`, `*`, `{0…}`:
- * `/(Draft )?Saved/` matches a plain "Saved").
+ * picked, so only top-level groups count, outside any other group (an optional parent, a
+ * lookahead), and none at all with an alternation anywhere in `pattern` (`/(Save)|(Discard)/`
+ * matches without "Discard"). A group with a quantifier that allows zero right after it (`?`,
+ * `*`, `{0…}`: `/(Draft )?Saved/` matches a plain "Saved") is skipped too.
  */
 export function longestDeterministicGroup(pattern: RegExp): string | undefined {
-  if (pattern.source.includes('|')) {
+  const source = pattern.source;
+  if (source.includes('|')) {
     return undefined;
   }
-  const patternToString = pattern.toString();
-  const matches = [...patternToString.matchAll(/\(([^)]+)\)(?![?*]|\{0)/g)].map(
-    (match) => match[1],
-  );
-  if (!matches || !matches.length) {
-    return undefined;
-  }
-  const noSpecialChars: string[] = matches.filter((match): match is string => {
-    if (!match) {
-      return false;
+  const literals: string[] = [];
+  const open: number[] = [];
+  let inClass = false;
+  for (let i = 0; i < source.length; i++) {
+    const char = source[i];
+    if (char === '\\') {
+      i++;
+    } else if (inClass) {
+      inClass = char !== ']';
+    } else if (char === '[') {
+      inClass = true;
+    } else if (char === '(') {
+      open.push(i);
+    } else if (char === ')') {
+      const start = open.pop();
+      if (start == null || open.length > 0) {
+        continue;
+      }
+      const body = source.slice(start + 1, i);
+      const after = source.slice(i + 1);
+      const skippable = /^(?:[?*]|\{0)/.test(after);
+      if (!skippable && body !== '' && !/[.*+?^${}()|[\]\\]/.test(body)) {
+        literals.push(body);
+      }
     }
-    const regexSpecialCharsPattern = /[.*+?^${}()|[\]\\]/;
-    return !regexSpecialCharsPattern.test(match);
-  });
-  const longestString = noSpecialChars.reduce(
-    (max, str) => (str.length > max.length ? str : max),
-    '',
-  );
-  if (longestString == '') {
-    return undefined;
   }
-  return longestString;
+  const longest = literals.reduce((max, str) => (str.length > max.length ? str : max), '');
+  return longest === '' ? undefined : longest;
 }
 
 /**
@@ -195,7 +204,8 @@ function isPageScriptError(error: unknown): boolean {
 }
 
 export function isNoSuchWindowError(error: unknown): boolean {
-  if (isPageScriptError(error)) {
+  // Its message can quote a locator whose own text says "no such window".
+  if (error instanceof ActionWindowClosedError || isPageScriptError(error)) {
     return false;
   }
   if (error instanceof Error) {
