@@ -118,9 +118,21 @@ export function getLatestBuildToolsVersions(versions: string[]): string | undefi
   return versions.sort((a, b) => (a > b ? -1 : 1))[0];
 }
 
+/**
+ * The longest literal capture group of `pattern` that every match must contain, for a driver
+ * search to be narrowed to; `undefined` when there is none. A group a match can skip is never
+ * picked: with an alternation anywhere in `pattern` (`/(Save)|(Discard)/` matches without
+ * "Discard"), or a quantifier that allows zero right after the group (`?`, `*`, `{0…}`:
+ * `/(Draft )?Saved/` matches a plain "Saved").
+ */
 export function longestDeterministicGroup(pattern: RegExp): string | undefined {
+  if (pattern.source.includes('|')) {
+    return undefined;
+  }
   const patternToString = pattern.toString();
-  const matches = [...patternToString.matchAll(/\(([^)]+)\)/g)].map((match) => match[1]);
+  const matches = [...patternToString.matchAll(/\(([^)]+)\)(?![?*]|\{0)/g)].map(
+    (match) => match[1],
+  );
   if (!matches || !matches.length) {
     return undefined;
   }

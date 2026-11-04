@@ -127,7 +127,7 @@ describe('getByText', () => {
   test('a case-insensitive RegExp is narrowed case-insensitively, then tested as is', () => {
     const android = device(true).getByText(/(save)/i);
     expect(compiled(android)).toEqual({
-      selector: 'textMatches("(?is).*save.*")',
+      selector: 'textMatches("(?isu).*save.*")',
       findStrategy: '-android uiautomator',
     });
     expect((android as unknown as { textToMatch: RegExp }).textToMatch).toEqual(/(save)/i);
