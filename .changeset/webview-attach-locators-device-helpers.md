@@ -15,9 +15,11 @@ again. Discovery never binds a browser: with Chrome or a Custom Tab in front,
 `attach({ context: 'WEBVIEW_chrome' })` does, and discovery fails within a few seconds saying so.
 On Android, when a WebView's renderer drops its connection and chromedriver answers
 `invalid session id` while Appium's session lives on, `webView` actions, `evaluate()` and
-`attach()` bind again what was bound and retry instead of failing. A window that closed under an
-action is recovered the same way. If the window `attach()` chose is gone, they fail saying so
-rather than act on another page. The renderer-drop and closed-window recovery and the browser
+`attach()` bind again what was bound and retry instead of failing. A window that closed before an
+action reached its element is recovered the same way. If the window `attach()` chose is gone,
+they and the next `webView` call fail saying so rather than act on another page. A `tap()` that
+closes its own window (a popup's Close) counts as done, as a Playwright click does; any other
+action whose window closes as it runs fails without being run again. The renderer-drop and closed-window recovery and the browser
 binding are unit-tested only. `webView.getByRole(role, { name, exact, level })` matches ARIA roles,
 explicit and implicit, by accessible name, reading names through `<slot>`s and hidden state through
 shadow hosts. Locators chain: `getByText`, `getByRole`, `getByLabel` and `getByTestId` on a
@@ -51,9 +53,11 @@ visibility wait found instead of looking it up once more; on iOS every XPath loo
 page-source snapshot. If that element went stale in between, it waits and acts once more on the
 node that replaced it. A chained locator's visibility wait looks under every one of the parent's
 matches while the child's matches so far are hidden. A case-insensitive RegExp in
-`device.getByText()` is narrowed case-insensitively (`textMatches("(?is)…")` on Android,
-`CONTAINS[c]` on iOS, unit-tested only) rather than to a case-sensitive substring that missed
-other casings, and the substring a RegExp is narrowed to has its quotes escaped.
+`device.getByText()` is narrowed case-insensitively, Unicode included (`textMatches("(?isu)…")`
+on Android, `CONTAINS[c]` on iOS, unit-tested only), rather than to a case-sensitive substring
+that missed other casings. The substring a RegExp is narrowed to has its quotes escaped, and a
+group a match can skip (one side of an alternation, or a group under `?`, `*` or `{0,…}`) is no
+longer narrowed to: `/(Save)|(Discard)/` used to find only "Discard".
 
 **Package.** `request` and the types `APIRequest`, `APIRequestContext`, `APIResponse` and
 `TestInfo` are re-exported from `@playwright/test`. The CLI runs Playwright and Appium by module
@@ -87,6 +91,10 @@ different `@playwright/test` and ran its CLI through `npx` now runs appwright's.
   parent's matches.
 - `device.getByText(/(save)/i)` now also finds "Save": the driver's search was narrowed
   case-sensitively before, so other casings never matched, and the element that wins can change.
+  The same goes for a RegExp with an alternation or an optional group, which now matches every
+  element its RegExp does.
+- A `webView` `tap()` whose window closes as it lands resolves instead of failing; other actions
+  whose window closes as they run fail with a message saying so, and are not run again.
 - A `webView` action or `evaluate()` whose window closed under it binds again and retries, as the
   recovery always meant to (it gave up at once). After `attach()` chose that window with `page`
   or `pageUrl`, it fails saying the window is gone instead.
