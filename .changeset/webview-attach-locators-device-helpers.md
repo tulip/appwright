@@ -15,15 +15,19 @@ again. Discovery never binds a browser: with Chrome or a Custom Tab in front,
 `attach({ context: 'WEBVIEW_chrome' })` does, and discovery fails within a few seconds saying so.
 On Android, when a WebView's renderer drops its connection and chromedriver answers
 `invalid session id` while Appium's session lives on, `webView` actions, `evaluate()` and
-`attach()` bind again what was bound and retry instead of failing. A window that closed before an
-action reached its element is recovered the same way. If the window `attach()` chose is gone,
-they and the next `webView` call fail saying so rather than act on another page. A `tap()` that
-closes its own window (a popup's Close) counts as done, as a Playwright click does; any other
-action whose window closes as it runs fails without being run again. The renderer-drop and closed-window recovery and the browser
-binding are unit-tested only. `webView.getByRole(role, { name, exact, level })` matches ARIA roles,
-explicit and implicit, by accessible name, reading names through `<slot>`s and hidden state through
-shadow hosts. Locators chain: `getByText`, `getByRole`, `getByLabel` and `getByTestId` on a
-locator look inside its element. `getByTestId()` and `getByPlaceholder()` escape quotes.
+`attach()` bind again what was bound and retry instead of failing. A window found closed while an
+action waits for its element is recovered the same way. If the window `attach()` chose is gone,
+they and the next `webView` call fail saying so rather than act on another page. A `no such
+window` from the action itself counts as the action having closed its window: `tap()` resolves,
+as a Playwright click on a page that closes does, even when the window closed just before the
+click landed and nothing was tapped; any other action, `press('Enter')` included, fails without
+being run again. On an Android emulator, Chrome answers a click that closes its window normally,
+and the next call reports the closed window. The renderer-drop and closed-window recovery and the
+browser binding are otherwise unit-tested only. `webView.getByRole(role, { name, exact, level })`
+matches ARIA roles, explicit and implicit, by accessible name, reading names through `<slot>`s and
+hidden state through shadow hosts. Locators chain: `getByText`, `getByRole`, `getByLabel` and
+`getByTestId` on a locator look inside its element. `getByTestId()` and `getByPlaceholder()`
+escape quotes.
 
 **Device.** `getPageSource()` (reads the native tree, restores the WebView), `switchToWindow()` /
 `getUrl()`, `getUdid()` (the device this worker's session landed on), a public `isSimulator()`,
@@ -36,10 +40,10 @@ the window shape agree; `getOrientation()` and `getWindowRect()` read them. The 
 rotates the device back to the configured `device.orientation` after a test that rotated, since a
 rotation outlives the session. `drag({ from, to })` and `swipeFromEdge('left' | 'right')` are W3C
 touch gestures, and `pressBack()` is Android's back key. `locator.boundingBox()` measures an
-element, or returns `null` when it is hidden, as Playwright's does. On iOS, where every provider starts the session with `appium:autoAcceptAlerts`,
-`withAlertAutoAccept(false, fn)` / `setAlertAutoAccept()` keep WebDriverAgent from answering the
-app's own alerts, and `acceptAlert()` / `dismissAlert()` / `getAlertText()` answer them on both
-platforms.
+element, or returns `null` when it is hidden, as Playwright's does. On iOS, where every provider
+starts the session with `appium:autoAcceptAlerts`, `withAlertAutoAccept(false, fn)` /
+`setAlertAutoAccept()` keep WebDriverAgent from answering the app's own alerts, and `acceptAlert()`
+/ `dismissAlert()` / `getAlertText()` answer them on both platforms.
 
 **App and pages.** `getAppState()` (an exported `AppState`) and `getBuildInfo()` (bundle id, version
 and build number read off the project's build) need no host-side parsing in the suite.
@@ -93,8 +97,9 @@ different `@playwright/test` and ran its CLI through `npx` now runs appwright's.
   case-sensitively before, so other casings never matched, and the element that wins can change.
   The same goes for a RegExp with an alternation or an optional group, which now matches every
   element its RegExp does.
-- A `webView` `tap()` whose window closes as it lands resolves instead of failing; other actions
-  whose window closes as they run fail with a message saying so, and are not run again.
+- A `webView` `tap()` whose click is answered with `no such window` resolves instead of failing,
+  including when the window closed just before the click landed. Other actions whose window
+  closes as they run fail with an `ActionWindowClosedError` saying so, and are not run again.
 - A `webView` action or `evaluate()` whose window closed under it binds again and retries, as the
   recovery always meant to (it gave up at once). After `attach()` chose that window with `page`
   or `pageUrl`, it fails saying the window is gone instead.
