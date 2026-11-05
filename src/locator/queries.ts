@@ -62,8 +62,9 @@ export function nativeTextQuery(
     let selector: string;
     if (text.ignoreCase) {
       // `textContains` and `CONTAINS` compare case-sensitively: narrowed with them, `/(save)/i`
-      // would never see "Save". In `(?isu)`, `u` folds case beyond ASCII as JS `/i` does
-      // ("Übersicht"), and `s` lets `.*` span a multi-line text.
+      // would never see "Save". UiAutomator runs `textMatches` on the device, whose ICU-backed
+      // `Pattern` folds case beyond ASCII ("Übersicht") as JS `/i` does, with or without `u`;
+      // `s` lets `.*` span a multi-line text.
       selector = isAndroid ? `textMatches("(?isu).*${quoted}.*")` : `label CONTAINS[c] "${quoted}"`;
     } else {
       selector = isAndroid ? `textContains("${quoted}")` : `label CONTAINS "${quoted}"`;

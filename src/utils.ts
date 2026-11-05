@@ -123,15 +123,13 @@ export function getLatestBuildToolsVersions(versions: string[]): string | undefi
  * The longest literal capture group of `pattern` that every match must contain, for a driver
  * search to be narrowed to; `undefined` when there is none. A group a match can skip is never
  * picked, so only top-level groups count, outside any other group (an optional parent, a
- * lookahead), and none at all with an alternation anywhere in `pattern` (`/(Save)|(Discard)/`
- * matches without "Discard"). A group with a quantifier that allows zero right after it (`?`,
+ * lookahead), and none at all with a top-level alternation (`/(Save)|(Discard)/` matches
+ * without "Discard"); an alternation inside a group (`/(Submit) (?:now|later)/`) leaves the
+ * top-level groups required. A group with a quantifier that allows zero right after it (`?`,
  * `*`, `{0…}`: `/(Draft )?Saved/` matches a plain "Saved") is skipped too.
  */
 export function longestDeterministicGroup(pattern: RegExp): string | undefined {
   const source = pattern.source;
-  if (source.includes('|')) {
-    return undefined;
-  }
   const literals: string[] = [];
   const open: number[] = [];
   let inClass = false;
@@ -143,6 +141,9 @@ export function longestDeterministicGroup(pattern: RegExp): string | undefined {
       inClass = char !== ']';
     } else if (char === '[') {
       inClass = true;
+    } else if (char === '|' && open.length === 0) {
+      // A top-level alternation lets a match skip every group.
+      return undefined;
     } else if (char === '(') {
       open.push(i);
     } else if (char === ')') {

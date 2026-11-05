@@ -32,6 +32,14 @@ test("a group a match can skip is never picked", () => {
   expect(longestDeterministicGroup(/(Saved)+ at/)).toBe("Saved");
 });
 
+test("an alternation inside a group leaves the top-level groups required", () => {
+  expect(longestDeterministicGroup(/(Submit) (?:now|later)/)).toBe("Submit");
+  expect(longestDeterministicGroup(/(?:a|b)(Saved)/)).toBe("Saved");
+  // A `|` in a character class or escaped is a literal, not an alternation.
+  expect(longestDeterministicGroup(/[|](Saved)/)).toBe("Saved");
+  expect(longestDeterministicGroup(/a\|(Saved)/)).toBe("Saved");
+});
+
 test("a group nested in another, which a match can skip with its parent, is never picked", () => {
   expect(longestDeterministicGroup(/(?:Re: (?:Fwd: )?(Draft))?Saved/)).toBe(undefined);
   expect(longestDeterministicGroup(/(?:(a)?(Draft))?Saved/)).toBe(undefined);

@@ -21,7 +21,7 @@ export class NonRetryableError extends Error {
 }
 
 /**
- * An action's window closed while the action ran on it, most likely closed by the action itself.
+ * An action's window was already closed when the action reached it, so the action did not run.
  * Never a closed window to the WebView's recovery (see `isNoSuchWindowError()`), whatever its
  * message quotes, so the action is not run again on another page. `cause` is the driver's error.
  */

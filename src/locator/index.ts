@@ -17,7 +17,6 @@ import {
   TimeoutOptions,
   WebDriverErrors,
 } from '../types';
-import { logger } from '../logger';
 import { ActionWindowClosedError, RetryableError, TimeoutError } from '../types/errors';
 import { boxedStep, errorMessage, isInvalidSessionError, isNoSuchWindowError } from '../utils';
 import {
@@ -419,21 +418,12 @@ export class Locator {
   @boxedStep
   async tap(options?: ActionOptions) {
     return await this.withVisibleElement('tap', options, async (elementId) => {
-      try {
-        await this.webDriverClient.elementClick(elementId);
-      } catch (error) {
-        // A tap that closes its own window — a popup's Close or Submit calling `window.close()`.
-        // Chrome on an Android emulator answers that click before the window goes (checked), and
-        // the next `webView` call reports the closed window. Should the close win the race,
-        // chromedriver answers `no such window`: as with Playwright's click on a page that
-        // closes, the tap is done, and retrying it would tap another page. Matched on the
-        // driver's error (see `isNoSuchWindowError()`), so a window that closed just before the
-        // click landed is taken as done too.
-        if (!isNoSuchWindowError(error)) {
-          throw error;
-        }
-        logger.log(`tap(): ${this.named}'s window closed as it was tapped; the tap is done.`);
-      }
+      // A tap that closes its own window (a popup's Close or Submit calling `window.close()`)
+      // resolves: chromedriver turns the target detaching mid-command into OK, and the next
+      // `webView` call reports the closed window. It answers `no such window` only when the
+      // window was gone before the click ran, so nothing was tapped, and that fails as for any
+      // other action (see `withVisibleElement`).
+      await this.webDriverClient.elementClick(elementId);
     });
   }
 
@@ -618,14 +608,16 @@ export class Locator {
       try {
         return await act(elementId);
       } catch (error) {
-        // The window closed while the action ran on it: most likely the action closed it. As an
-        // `ActionWindowClosedError` it is not a closed window to the WebView's window-closure
-        // recovery, which would run the action again on another page. A closed window found by the wait, before acting, is left as
-        // the driver's error, for that recovery to bind the WebView again and retry.
+        // The window was closed when the action reached it. chromedriver checks the window
+        // before running a command, so the action did not run; an action that closes its own
+        // window gets OK instead. As an `ActionWindowClosedError` it is not a closed window to
+        // the WebView's window-closure recovery, which would run the action on another page. A
+        // closed window found by the wait, before acting, is left as the driver's error, for that
+        // recovery to bind the WebView again and retry.
         if (isNoSuchWindowError(error)) {
           throw new ActionWindowClosedError(
-            `Failed to ${action}: Element ${this.named}'s window closed while the action ran, ` +
-              'probably closed by the action itself. Call webView.attach() to bind the page to use now.',
+            `Failed to ${action}: Element ${this.named}'s window was closed when the action ` +
+              'reached it. Call webView.attach() to bind the page to use now.',
             error,
           );
         }

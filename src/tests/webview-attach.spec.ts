@@ -725,11 +725,21 @@ describe('a closed window', () => {
     expect(client.elementClick).toHaveBeenCalledWith('el');
   });
 
-  test('closed by the tap itself, counts the tap as done without tapping again', async () => {
+  test('closed when the tap reached it fails the tap without tapping again', async () => {
+    // chromedriver answers `no such window` only for a window gone before the click ran; a
+    // click that closes its own window is answered with OK.
     const client = mockClient();
     buttonPage(client);
     (client.elementClick as Mock).mockRejectedValue(CLOSED);
-    await webView(client).getByRole('button', { name: 'Close' }).tap();
+    const error = await webView(client)
+      .getByRole('button', { name: 'Close' })
+      .tap()
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ActionWindowClosedError);
+    expect((error as Error).message).toBe(
+      'Failed to tap: Element getByRole("button", { name: "Close" })\'s window was closed when the ' +
+        'action reached it. Call webView.attach() to bind the page to use now.',
+    );
     expect(client.elementClick).toHaveBeenCalledTimes(1);
     expect(switches(client)).not.toContain('NATIVE_APP');
   });
@@ -739,7 +749,7 @@ describe('a closed window', () => {
     buttonPage(client);
     (client.getElementText as Mock).mockRejectedValue(CLOSED);
     await expect(webView(client).getByRole('button', { name: 'Save' }).getText()).rejects.toThrow(
-      'Failed to getText: Element getByRole("button", { name: "Save" })\'s window closed while the action ran',
+      'Failed to getText: Element getByRole("button", { name: "Save" })\'s window was closed when the action reached it',
     );
     expect(client.getElementText).toHaveBeenCalledTimes(1);
     expect(switches(client)).not.toContain('NATIVE_APP');
