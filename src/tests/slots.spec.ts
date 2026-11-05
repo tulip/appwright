@@ -5,14 +5,13 @@ import {
   assertWorkersFitDevices,
   emulatorPortFromUdid,
   getAppiumPort,
-  getDeviceEntryForSlot,
   getSlotCapabilities,
   resolveDeviceEntries,
 } from '../providers/slots';
 import { Platform } from '../types';
 
 describe('getSlotCapabilities', () => {
-  test('android: only systemPort, offset by slot', () => {
+  test('android: only systemPort, offset by the port slot', () => {
     expect(getSlotCapabilities(Platform.ANDROID, 0)).toEqual({ 'appium:systemPort': 8200 });
     expect(getSlotCapabilities(Platform.ANDROID, 3)).toEqual({ 'appium:systemPort': 8203 });
   });
@@ -24,11 +23,11 @@ describe('getSlotCapabilities', () => {
     expect(Object.keys(caps)).toEqual(['appium:systemPort']);
   });
 
-  test('ios: wdaLocalPort, mjpegServerPort and derivedDataPath per slot', () => {
+  test('ios: wdaLocalPort, mjpegServerPort and derivedDataPath from the port slot', () => {
     const caps = getSlotCapabilities(Platform.IOS, 2);
     expect(caps['appium:wdaLocalPort']).toBe(8102);
     expect(caps['appium:mjpegServerPort']).toBe(9102);
-    expect(String(caps['appium:derivedDataPath'])).toContain('slot-2');
+    expect(String(caps['appium:derivedDataPath'])).toMatch(/appwright-wda[\\/]slot-2$/);
     expect(Object.keys(caps).sort()).toEqual([
       'appium:derivedDataPath',
       'appium:mjpegServerPort',
@@ -36,7 +35,7 @@ describe('getSlotCapabilities', () => {
     ]);
   });
 
-  test('ios: slot 0 and slot 1 get distinct values for every capability', () => {
+  test('ios: two port slots get distinct values for every capability', () => {
     const slot0 = getSlotCapabilities(Platform.IOS, 0);
     const slot1 = getSlotCapabilities(Platform.IOS, 1);
     expect(slot0['appium:wdaLocalPort']).toBe(8100);
@@ -44,13 +43,18 @@ describe('getSlotCapabilities', () => {
     expect(slot0['appium:mjpegServerPort']).toBe(9100);
     expect(slot1['appium:mjpegServerPort']).toBe(9101);
     expect(slot0['appium:derivedDataPath']).not.toBe(slot1['appium:derivedDataPath']);
-    expect(String(slot0['appium:derivedDataPath'])).toContain('slot-0');
-    expect(String(slot1['appium:derivedDataPath'])).toContain('slot-1');
   });
 
-  test('negative slot throws', () => {
-    expect(() => getSlotCapabilities(Platform.ANDROID, -1)).toThrow(/non-negative/);
-    expect(() => getSlotCapabilities(Platform.IOS, -1)).toThrow(/non-negative/);
+  test('ios: the last slot stays below the next range', () => {
+    const caps = getSlotCapabilities(Platform.IOS, 99);
+    expect(caps['appium:wdaLocalPort']).toBe(8199);
+    expect(getSlotCapabilities(Platform.ANDROID, 0)['appium:systemPort']).toBe(8200);
+  });
+
+  test('out-of-range slots throw', () => {
+    expect(() => getSlotCapabilities(Platform.ANDROID, -1)).toThrow(/between 0 and 99/);
+    expect(() => getSlotCapabilities(Platform.IOS, 100)).toThrow(/between 0 and 99/);
+    expect(() => getSlotCapabilities(Platform.IOS, 1.5)).toThrow(/between 0 and 99/);
   });
 });
 
@@ -80,36 +84,6 @@ describe('resolveDeviceEntries', () => {
 
   test('entry without udid throws', () => {
     expect(() => resolveDeviceEntries({ devices: [{ udid: '' }] })).toThrow(/must have a `udid`/);
-  });
-});
-
-describe('getDeviceEntryForSlot', () => {
-  test('legacy config (no devices): slot 0 is undefined so the provider auto-picks', () => {
-    expect(getDeviceEntryForSlot({}, 0)).toBeUndefined();
-  });
-
-  test('legacy config (no devices): slot 1 throws and points at `devices`', () => {
-    expect(() => getDeviceEntryForSlot({}, 1)).toThrow(/devices/);
-  });
-
-  test('with two devices: slot 1 is the second entry', () => {
-    const device = { devices: [{ udid: 'first' }, { udid: 'second' }] };
-    expect(getDeviceEntryForSlot(device, 0)).toEqual({ udid: 'first' });
-    expect(getDeviceEntryForSlot(device, 1)).toEqual({ udid: 'second' });
-  });
-
-  test('with two devices: slot 2 throws', () => {
-    const device = { devices: [{ udid: 'first' }, { udid: 'second' }] };
-    expect(() => getDeviceEntryForSlot(device, 2)).toThrow(/only 2 device\(s\) configured/);
-  });
-
-  test('single udid shorthand: slot 0 resolves, slot 1 throws', () => {
-    expect(getDeviceEntryForSlot({ udid: 'x' }, 0)).toEqual({ udid: 'x' });
-    expect(() => getDeviceEntryForSlot({ udid: 'x' }, 1)).toThrow(/only 1 device\(s\) configured/);
-  });
-
-  test('negative slot throws', () => {
-    expect(() => getDeviceEntryForSlot({ udid: 'x' }, -1)).toThrow(/non-negative/);
   });
 });
 
