@@ -17,12 +17,10 @@ On Android, when a WebView's renderer drops its connection and chromedriver answ
 `invalid session id` while Appium's session lives on, `webView` actions, `evaluate()` and
 `attach()` bind again what was bound and retry instead of failing. A window found closed while an
 action waits for its element is recovered the same way. If the window `attach()` chose is gone,
-they and the next `webView` call fail saying so rather than act on another page. A `no such
-window` from the action itself counts as the action having closed its window: `tap()` resolves,
-as a Playwright click on a page that closes does, even when the window closed just before the
-click landed and nothing was tapped; any other action, `press('Enter')` included, fails without
-being run again. On an Android emulator, Chrome answers a click that closes its window normally,
-and the next call reports the closed window. The renderer-drop and closed-window recovery and the
+they and the next `webView` call fail saying so rather than act on another page. An action that
+closes its own window resolves, and the next call reports the closed window (checked on an
+Android emulator with Chrome). A window already closed when the action reaches it fails the
+action with an `ActionWindowClosedError`, without running it again. The renderer-drop and closed-window recovery and the
 browser binding are otherwise unit-tested only. `webView.getByRole(role, { name, exact, level })`
 matches ARIA roles, explicit and implicit, by accessible name, reading names through `<slot>`s and
 hidden state through shadow hosts. Locators chain: `getByText`, `getByRole`, `getByLabel` and
@@ -60,8 +58,8 @@ matches while the child's matches so far are hidden. A case-insensitive RegExp i
 `device.getByText()` is narrowed case-insensitively, Unicode included (`textMatches("(?isu)…")`
 on Android, `CONTAINS[c]` on iOS, unit-tested only), rather than to a case-sensitive substring
 that missed other casings. The substring a RegExp is narrowed to has its quotes escaped, and a
-group a match can skip (one side of an alternation, or a group under `?`, `*` or `{0,…}`) is no
-longer narrowed to: `/(Save)|(Discard)/` used to find only "Discard".
+group a match can skip (one side of a top-level alternation, or a group under `?`, `*` or
+`{0,…}`) is no longer narrowed to: `/(Save)|(Discard)/` used to find only "Discard".
 
 **Package.** `request` and the types `APIRequest`, `APIRequestContext`, `APIResponse` and
 `TestInfo` are re-exported from `@playwright/test`. The CLI runs Playwright and Appium by module
@@ -95,11 +93,10 @@ different `@playwright/test` and ran its CLI through `npx` now runs appwright's.
   parent's matches.
 - `device.getByText(/(save)/i)` now also finds "Save": the driver's search was narrowed
   case-sensitively before, so other casings never matched, and the element that wins can change.
-  The same goes for a RegExp with an alternation or an optional group, which now matches every
-  element its RegExp does.
-- A `webView` `tap()` whose click is answered with `no such window` resolves instead of failing,
-  including when the window closed just before the click landed. Other actions whose window
-  closes as they run fail with an `ActionWindowClosedError` saying so, and are not run again.
+  The same goes for a RegExp with a top-level alternation or an optional group, which now
+  matches every element its RegExp does.
+- A `webView` action whose window was already closed when it reached it fails with an
+  `ActionWindowClosedError` saying so, and is not run again on another page.
 - A `webView` action or `evaluate()` whose window closed under it binds again and retries, as the
   recovery always meant to (it gave up at once). After `attach()` chose that window with `page`
   or `pageUrl`, it fails saying the window is gone instead.
