@@ -32,7 +32,6 @@
   "license": "Apache-2.0",
   "description": "E2E mobile app testing done right, with the Playwright test runner",
   "dependencies": {
-    "@empiricalrun/llm": "^0.25.2",
     "@ffmpeg-installer/ffmpeg": "^1.1.0",
     "@playwright/test": "^1.58.1",
     "appium": "^3.2.0",
@@ -51,6 +50,7 @@
     "@types/fluent-ffmpeg": "^2.1.28",
     "@types/node": "^25.1.0",
     "eslint": "9.39.2",
+    "happy-dom": "^20.14.5",
     "typedoc": "0.28.16",
     "vitest": "^4.0.18"
   }

@@ -4,6 +4,7 @@ import path from 'path';
 import test from '@playwright/test';
 
 import { resolveOutputDir, VIDEOS_STORE_DIR } from './run-name';
+import { ActionWindowClosedError } from './types/errors';
 
 /**
  * Whether any argument asks for its companions to be hidden from the step title. `fill(value,
@@ -17,13 +18,43 @@ function hasSecretOption(args: unknown[]): boolean {
   );
 }
 
+/** A `WebPage` from `device.webPages()`: it carries its URL, which the title should not. */
+function isWebPage(value: unknown): value is { key: string; url: string } {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof (value as { key?: unknown }).key === 'string' &&
+    typeof (value as { url?: unknown }).url === 'string'
+  );
+}
+
 function formatStepArgs(args: unknown[]): string {
   if (!args.length) {
     return '';
   }
   const mask = hasSecretOption(args);
-  const formatted = args.map((a) => (mask && typeof a === 'string' ? '"***"' : JSON.stringify(a)));
+  // A page reads as its key: its URL can carry a sign-in code or token in the query or fragment.
+  const replacer = (_key: string, value: unknown) =>
+    isWebPage(value) ? `page ${value.key}` : value;
+  const formatted = args.map((a) =>
+    mask && typeof a === 'string' ? '"***"' : JSON.stringify(a, replacer),
+  );
   return '(' + formatted.join(' , ') + ')';
+}
+
+/**
+ * A page URL for errors and logs, without its query and fragment: after a sign-in hand-off they
+ * can carry an authorization code or access token, and errors reach the HTML report and the
+ * cloud providers' dashboards. What was dropped is marked with `?…` / `#…`.
+ */
+export function displayUrl(url: string): string {
+  const cut = url.search(/[?#]/);
+  if (cut === -1) {
+    return url;
+  }
+  const query = url.indexOf('?') !== -1 ? '?…' : '';
+  const fragment = url.indexOf('#') !== -1 ? '#…' : '';
+  return url.slice(0, cut) + query + fragment;
 }
 
 function isInsideTest(): boolean {
@@ -38,11 +69,16 @@ function isInsideTest(): boolean {
 export function boxedStep(target: Function, context: ClassMethodDecoratorContext) {
   return function replacementMethod(
     this: {
-      selector: string | RegExp;
+      selector?: string | RegExp;
+      description?: string;
     },
     ...args: any
   ) {
-    const path = this.selector ? `("${this.selector}")` : '';
+    const path = this.description
+      ? `(${this.description})`
+      : this.selector
+      ? `("${this.selector}")`
+      : '';
     const argsString = formatStepArgs(Array.from(args));
     const name = `${context.name as string}${path}${argsString}`;
     if (!isInsideTest()) {
@@ -83,27 +119,48 @@ export function getLatestBuildToolsVersions(versions: string[]): string | undefi
   return versions.sort((a, b) => (a > b ? -1 : 1))[0];
 }
 
+/**
+ * The longest literal capture group of `pattern` that every match must contain, for a driver
+ * search to be narrowed to; `undefined` when there is none. A group a match can skip is never
+ * picked, so only top-level groups count, outside any other group (an optional parent, a
+ * lookahead), and none at all with a top-level alternation (`/(Save)|(Discard)/` matches
+ * without "Discard"); an alternation inside a group (`/(Submit) (?:now|later)/`) leaves the
+ * top-level groups required. A group with a quantifier that allows zero right after it (`?`,
+ * `*`, `{0…}`: `/(Draft )?Saved/` matches a plain "Saved") is skipped too.
+ */
 export function longestDeterministicGroup(pattern: RegExp): string | undefined {
-  const patternToString = pattern.toString();
-  const matches = [...patternToString.matchAll(/\(([^)]+)\)/g)].map((match) => match[1]);
-  if (!matches || !matches.length) {
-    return undefined;
-  }
-  const noSpecialChars: string[] = matches.filter((match): match is string => {
-    if (!match) {
-      return false;
+  const source = pattern.source;
+  const literals: string[] = [];
+  const open: number[] = [];
+  let inClass = false;
+  for (let i = 0; i < source.length; i++) {
+    const char = source[i];
+    if (char === '\\') {
+      i++;
+    } else if (inClass) {
+      inClass = char !== ']';
+    } else if (char === '[') {
+      inClass = true;
+    } else if (char === '|' && open.length === 0) {
+      // A top-level alternation lets a match skip every group.
+      return undefined;
+    } else if (char === '(') {
+      open.push(i);
+    } else if (char === ')') {
+      const start = open.pop();
+      if (start == null || open.length > 0) {
+        continue;
+      }
+      const body = source.slice(start + 1, i);
+      const after = source.slice(i + 1);
+      const skippable = /^(?:[?*]|\{0)/.test(after);
+      if (!skippable && body !== '' && !/[.*+?^${}()|[\]\\]/.test(body)) {
+        literals.push(body);
+      }
     }
-    const regexSpecialCharsPattern = /[.*+?^${}()|[\]\\]/;
-    return !regexSpecialCharsPattern.test(match);
-  });
-  const longestString = noSpecialChars.reduce(
-    (max, str) => (str.length > max.length ? str : max),
-    '',
-  );
-  if (longestString == '') {
-    return undefined;
   }
-  return longestString;
+  const longest = literals.reduce((max, str) => (str.length > max.length ? str : max), '');
+  return longest === '' ? undefined : longest;
 }
 
 /**
@@ -135,7 +192,23 @@ export function escapeRegExp(value: string): string {
 export const delay = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
+/**
+ * A page script's own error (`javascript error`), which never stands for a driver condition,
+ * whatever its text says: `evaluate()` recovers from a closed window and a renderer drop by
+ * running the script again, and a script whose backend said "no such window" or "invalid
+ * session id" must not run again.
+ */
+function isPageScriptError(error: unknown): boolean {
+  const code = 'javascript error';
+  const name = (error as { name?: unknown } | null)?.name;
+  return (typeof name === 'string' && name.includes(code)) || errorMessage(error).startsWith(code);
+}
+
 export function isNoSuchWindowError(error: unknown): boolean {
+  // Its message can quote a locator whose own text says "no such window".
+  if (error instanceof ActionWindowClosedError || isPageScriptError(error)) {
+    return false;
+  }
   if (error instanceof Error) {
     if (error.name && error.name.toLowerCase().includes('nosuchwindowerror')) {
       return true;
@@ -146,4 +219,42 @@ export function isNoSuchWindowError(error: unknown): boolean {
   }
   const errorString = String(error).toLowerCase();
   return errorString.includes('no such window') || errorString.includes('nosuchwindowerror');
+}
+
+/**
+ * The name to switch to for a context Appium reported. Appium returns plain names unless the
+ * session asked for the full context list, whose entries are objects named by `id` (their `title`
+ * is the page's title).
+ */
+export function contextName(context: string | { id: string }): string {
+  return typeof context === 'string' ? context : context.id;
+}
+
+export function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Whether the driver rejected the command because the session behind the current context is
+ * gone. webdriver names its errors after their W3C code; the message is checked too, as it
+ * carries the same code whenever a proxy (Appium in front of chromedriver) rebuilt the error.
+ * A page script's own error never counts (see `isPageScriptError()`).
+ */
+export function isInvalidSessionError(error: unknown): boolean {
+  const code = 'invalid session id';
+  const name = (error as { name?: unknown } | null)?.name;
+  if (typeof name === 'string' && name.includes(code)) {
+    return true;
+  }
+  return !isPageScriptError(error) && errorMessage(error).includes(code);
+}
+
+/** Whether `url` contains `pattern`, or matches it when it is a RegExp. */
+export function urlMatches(url: string, pattern: string | RegExp): boolean {
+  if (typeof pattern === 'string') {
+    return url.includes(pattern);
+  }
+  // A `g`/`y` RegExp resumes from where its previous test() matched.
+  pattern.lastIndex = 0;
+  return pattern.test(url);
 }
