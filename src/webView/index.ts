@@ -549,7 +549,7 @@ export class WebView {
           try {
             const activeWindowHandles = await this.device.getWindowHandles();
             console.log('[WebView] Active window handles:', activeWindowHandles);
-          } catch (e) {
+          } catch {
             console.log('[WebView] Could not get active window handles');
           }
 

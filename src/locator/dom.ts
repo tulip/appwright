@@ -60,7 +60,10 @@ export function queryDom(root: Element | null, query: DomQuery): Element[] {
   }
 
   function normalize(value: string): string {
-    return value.replace(/​/g, '').replace(/\s+/g, ' ').trim();
+    return value
+      .replace(/\u200B/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
   }
 
   function holdsNoText(el: Element): boolean {
@@ -416,8 +419,8 @@ export function queryDom(root: Element | null, query: DomQuery): Element[] {
       tag === 'FIELDSET'
         ? el.querySelector('legend')
         : tag === 'TABLE'
-        ? el.querySelector('caption')
-        : null;
+          ? el.querySelector('caption')
+          : null;
     return caption ? normalize(contentName(caption, false)) : '';
   }
 

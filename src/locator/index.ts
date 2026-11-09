@@ -18,7 +18,7 @@ import {
   WebDriverErrors,
 } from '../types';
 import { ActionWindowClosedError, RetryableError, TimeoutError } from '../types/errors';
-import { boxedStep, errorMessage, isInvalidSessionError, isNoSuchWindowError } from '../utils';
+import { boxedStep, isInvalidSessionError, isNoSuchWindowError } from '../utils';
 import {
   LocatorQuery,
   nativeIdQuery,

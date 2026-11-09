@@ -18,7 +18,8 @@ export type Invocation = {
 
 function hasConfigFlag(args: readonly string[]): boolean {
   return args.some(
-    (arg) => arg === '--config' || arg === '-c' || arg.startsWith('--config=') || arg.startsWith('-c='),
+    (arg) =>
+      arg === '--config' || arg === '-c' || arg.startsWith('--config=') || arg.startsWith('-c='),
   );
 }
 

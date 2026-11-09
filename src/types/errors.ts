@@ -26,7 +26,10 @@ export class NonRetryableError extends Error {
  * message quotes, so the action is not run again on another page. `cause` is the driver's error.
  */
 export class ActionWindowClosedError extends Error {
-  constructor(message: string, readonly cause: unknown) {
+  constructor(
+    message: string,
+    readonly cause: unknown,
+  ) {
     super(message);
     this.name = 'ActionWindowClosedError';
   }

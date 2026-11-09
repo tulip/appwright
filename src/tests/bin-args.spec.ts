@@ -18,7 +18,11 @@ describe('prepareInvocation', () => {
   });
 
   test('appends the default config only when no config flag is given', () => {
-    expect(prepareInvocation(['test'], {}).pwArgs).toEqual(['test', '--config', DEFAULT_CONFIG_FILE]);
+    expect(prepareInvocation(['test'], {}).pwArgs).toEqual([
+      'test',
+      '--config',
+      DEFAULT_CONFIG_FILE,
+    ]);
     expect(prepareInvocation(['test', '--config', 'custom.ts'], {}).pwArgs).toEqual([
       'test',
       '--config',
@@ -58,6 +62,8 @@ describe('prepareInvocation', () => {
   });
 
   test('throws when --run-name has no value', () => {
-    expect(() => prepareInvocation(['test', '--run-name'], {})).toThrow(/--run-name requires a value/);
+    expect(() => prepareInvocation(['test', '--run-name'], {})).toThrow(
+      /--run-name requires a value/,
+    );
   });
 });

@@ -118,8 +118,9 @@ describe('webView.attach', () => {
     /** UiAutomator2's `mobile: getContexts`: one WebView or browser, its DevTools pages nested. */
     const listing =
       (webviewName: string, ...pages: { id: string; url: string }[]) =>
-      (): unknown =>
-        [{ webviewName, pages: pages.map((p) => ({ type: 'page', title: '', ...p })) }];
+      (): unknown => [
+        { webviewName, pages: pages.map((p) => ({ type: 'page', title: '', ...p })) },
+      ];
     const windows = (client: MockClient) =>
       (client.switchToWindow as Mock).mock.calls.map((c) => c[0]);
 

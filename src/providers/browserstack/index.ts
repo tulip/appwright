@@ -7,11 +7,7 @@ import { FullProject } from '@playwright/test';
 
 import { Device } from '../../device';
 import { logger } from '../../logger';
-import {
-  AppwrightConfig,
-  BrowserStackConfig,
-  DeviceProvider,
-} from '../../types';
+import { AppwrightConfig, BrowserStackConfig, DeviceProvider } from '../../types';
 
 type BrowserStackSessionDetails = {
   name: string;
@@ -205,7 +201,6 @@ export class BrowserStackDeviceProvider implements DeviceProvider {
               throw new Error('Failed to get reader from response body.');
             }
             const streamToFile = async () => {
-              // eslint-disable-next-line no-constant-condition
               while (true) {
                 const { done, value } = await reader.read();
                 if (done) break;

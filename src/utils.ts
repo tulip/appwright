@@ -77,8 +77,8 @@ export function boxedStep(target: Function, context: ClassMethodDecoratorContext
     const path = this.description
       ? `(${this.description})`
       : this.selector
-      ? `("${this.selector}")`
-      : '';
+        ? `("${this.selector}")`
+        : '';
     const argsString = formatStepArgs(Array.from(args));
     const name = `${context.name as string}${path}${argsString}`;
     if (!isInsideTest()) {

@@ -1,12 +1,12 @@
-import type { Reporter, TestCase, TestResult } from "@playwright/test/reporter";
-import { getProviderClass } from "./providers";
-import fs from "fs";
-import path from "path";
-import ffmpeg from "fluent-ffmpeg";
-import ffmpegInstaller from "@ffmpeg-installer/ffmpeg";
-import { logger } from "./logger";
-import { basePath } from "./utils";
-import { WorkerInfo, WorkerInfoStore } from "./fixture/workerInfo";
+import type { Reporter, TestCase, TestResult } from '@playwright/test/reporter';
+import { getProviderClass } from './providers';
+import fs from 'fs';
+import path from 'path';
+import ffmpeg from 'fluent-ffmpeg';
+import ffmpegInstaller from '@ffmpeg-installer/ffmpeg';
+import { logger } from './logger';
+import { basePath } from './utils';
+import { WorkerInfo, WorkerInfoStore } from './fixture/workerInfo';
 
 class VideoDownloader implements Reporter {
   private downloadPromises: Promise<any>[] = [];
@@ -22,21 +22,13 @@ class VideoDownloader implements Reporter {
   onTestBegin(test: TestCase, result: TestResult) {
     logger.log(`Starting test: ${test.title} on worker ${result.workerIndex}`);
     const workerInfoStore = new WorkerInfoStore();
-    void workerInfoStore.saveTestStartTime(
-      result.workerIndex,
-      test.title,
-      new Date(),
-    );
+    void workerInfoStore.saveTestStartTime(result.workerIndex, test.title, new Date());
   }
 
   onTestEnd(test: TestCase, result: TestResult) {
     logger.log(`Ending test: ${test.title} on worker ${result.workerIndex}`);
-    const sessionIdAnnotation = test.annotations.find(
-      ({ type }) => type === "sessionId",
-    );
-    const providerNameAnnotation = test.annotations.find(
-      ({ type }) => type === "providerName",
-    );
+    const sessionIdAnnotation = test.annotations.find(({ type }) => type === 'sessionId');
+    const providerNameAnnotation = test.annotations.find(({ type }) => type === 'providerName');
     // Check if test ran on `device` or on `persistentDevice`
     const isTestUsingDevice = sessionIdAnnotation && providerNameAnnotation;
     if (isTestUsingDevice) {
@@ -46,7 +38,7 @@ class VideoDownloader implements Reporter {
       const provider = getProviderClass(providerName!);
       this.downloadAndAttachDeviceVideo(test, result, provider, sessionId!);
       const otherAnnotations = test.annotations.filter(
-        ({ type }) => type !== "sessionId" && type !== "providerName",
+        ({ type }) => type !== 'sessionId' && type !== 'providerName',
       );
       test.annotations = otherAnnotations;
     } else {
@@ -57,13 +49,10 @@ class VideoDownloader implements Reporter {
         return;
       }
       test.annotations.push({
-        type: "workerInfo",
+        type: 'workerInfo',
         description: `Ran on worker #${workerIndex}.`,
       });
-      const expectedVideoPath = path.join(
-        basePath(),
-        `worker-${workerIndex}-video.mp4`,
-      );
+      const expectedVideoPath = path.join(basePath(), `worker-${workerIndex}-video.mp4`);
       // The `onTestEnd` is method is called before the worker ends and
       // the worker's `endTime` is saved to disk. We add a 5 secs delay
       // to prevent a harmful race condition.
@@ -75,9 +64,7 @@ class VideoDownloader implements Reporter {
           }
           const { providerName, sessionId, endTime } = workerInfo;
           if (!providerName || !sessionId) {
-            throw new Error(
-              `Provider name or session id not found for worker: ${workerIndex}`,
-            );
+            throw new Error(`Provider name or session id not found for worker: ${workerIndex}`);
           }
           if (!this.providerSupportsVideo(providerName)) {
             return; // Nothing to do here
@@ -96,24 +83,16 @@ class VideoDownloader implements Reporter {
             if (!downloaded) {
               return;
             }
-            return this.trimAndAttachPersistentDeviceVideo(
-              test,
-              result,
-              downloaded.path,
-            );
+            return this.trimAndAttachPersistentDeviceVideo(test, result, downloaded.path);
           } else {
             // This is an intermediate test in the worker, so let's wait for the
             // video file to be found on disk. Once it is, we trim and attach it.
             await waitFor(() => fs.existsSync(expectedVideoPath));
-            return this.trimAndAttachPersistentDeviceVideo(
-              test,
-              result,
-              expectedVideoPath,
-            );
+            return this.trimAndAttachPersistentDeviceVideo(test, result, expectedVideoPath);
           }
         })
         .catch((e) => {
-          logger.error("Failed to get worker end time:", e);
+          logger.error('Failed to get worker end time:', e);
         });
       this.downloadPromises.push(workerDownload);
     }
@@ -143,8 +122,7 @@ class VideoDownloader implements Reporter {
       // TODO: We can use the startTime of the second test in the worker
       pathToAttach = workerVideoPath;
     } else {
-      const trimSkipPoint =
-        (testStart.getTime() - workerStart.getTime()) / 1000;
+      const trimSkipPoint = (testStart.getTime() - workerStart.getTime()) / 1000;
       const trimmedFileName = `worker-${workerIdx}-trimmed-${test.id}.mp4`;
       try {
         pathToAttach = await trimVideo({
@@ -154,17 +132,17 @@ class VideoDownloader implements Reporter {
           outputPath: trimmedFileName,
         });
       } catch (e) {
-        logger.error("Failed to trim video:", e);
+        logger.error('Failed to trim video:', e);
         test.annotations.push({
-          type: "videoError",
+          type: 'videoError',
           description: `Unable to trim video, attaching full video instead. Test starts at ${trimSkipPoint} secs.`,
         });
       }
     }
     result.attachments.push({
       path: pathToAttach,
-      contentType: "video/mp4",
-      name: "video",
+      contentType: 'video/mp4',
+      name: 'video',
     });
   }
 
@@ -186,7 +164,7 @@ class VideoDownloader implements Reporter {
         }
         result.attachments.push({
           ...downloadedVideo,
-          name: "video",
+          name: 'video',
         });
         return downloadedVideo;
       });
@@ -207,7 +185,7 @@ function waitFor(
     let interval: any;
     const timeoutId = setTimeout(() => {
       clearInterval(interval);
-      reject(new Error("Timed out waiting for condition"));
+      reject(new Error('Timed out waiting for condition'));
     }, timeout);
     interval = setInterval(() => {
       if (condition()) {
@@ -239,23 +217,23 @@ function trimVideo({
   const fullOutputPath = path.join(dirPath, outputPath);
   fs.copyFileSync(originalVideoPath, copyFullPath);
   return new Promise((resolve, reject) => {
-    let stdErrs = "";
+    let stdErrs = '';
     ffmpeg(copyFullPath)
       .setFfmpegPath(ffmpegInstaller.path)
       .setStartTime(startSecs)
       .setDuration(durationSecs)
       .output(fullOutputPath)
-      .on("end", () => {
+      .on('end', () => {
         logger.log(`Trimmed video saved at: ${fullOutputPath}`);
         fs.unlinkSync(copyFullPath);
         resolve(fullOutputPath);
       })
-      .on("stderr", (stderrLine) => {
-        stdErrs += stderrLine + "\n";
+      .on('stderr', (stderrLine) => {
+        stdErrs += stderrLine + '\n';
       })
-      .on("error", (err) => {
-        logger.error("ffmpeg error:", err);
-        logger.error("ffmpeg stderr:", stdErrs);
+      .on('error', (err) => {
+        logger.error('ffmpeg error:', err);
+        logger.error('ffmpeg stderr:', stdErrs);
         reject(err);
       })
       .run();
@@ -272,7 +250,6 @@ async function getWorkerInfo(idx: number): Promise<WorkerInfo | undefined> {
   return workerInfoStore.getWorkerFromDisk(idx);
 }
 
-const waitFiveSeconds = () =>
-  new Promise((resolve) => setTimeout(resolve, 5000));
+const waitFiveSeconds = () => new Promise((resolve) => setTimeout(resolve, 5000));
 
 export default VideoDownloader;

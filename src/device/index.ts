@@ -701,8 +701,8 @@ export class Device {
         capability('autoAcceptAlerts') === true
           ? ALERT_ACCEPT
           : capability('autoDismissAlerts') === true
-          ? ALERT_DISMISS
-          : ALERT_NONE;
+            ? ALERT_DISMISS
+            : ALERT_NONE;
     }
     return this.alertAction;
   }
@@ -886,8 +886,8 @@ export class Device {
       app == null
         ? {}
         : this.getPlatform() == Platform.ANDROID
-        ? { package: app }
-        : { bundleId: app };
+          ? { package: app }
+          : { bundleId: app };
     const before = this.bundleId;
 
     await this.executeMobileCommand('mobile: deepLink', { url, ...target });
@@ -1181,7 +1181,6 @@ export class Device {
     }
     logger.log(`device.pause: Use Appium Inspector to attach to the session.`);
     let iterations = 0;
-    // eslint-disable-next-line no-constant-condition
     while (true) {
       await new Promise((resolve) => setTimeout(resolve, 20_000));
       await this.webDriverClient.takeScreenshot();

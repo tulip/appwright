@@ -184,9 +184,11 @@ describe('restoreOrientation (after each test)', () => {
 
   test('Android rotates whatever is in front, without activating the app', async () => {
     const client = mockClient(true, {
-      executeScript: vi.fn().mockImplementation(async (command: string) =>
-        command === 'mobile: getCurrentPackage' ? 'com.android.chrome' : undefined,
-      ),
+      executeScript: vi
+        .fn()
+        .mockImplementation(async (command: string) =>
+          command === 'mobile: getCurrentPackage' ? 'com.android.chrome' : undefined,
+        ),
     });
     const d = device(client);
     await d.setOrientation(DeviceOrientation.LANDSCAPE);
