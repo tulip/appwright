@@ -745,6 +745,33 @@ describe('a closed window', () => {
     expect(switches(client)).not.toContain('NATIVE_APP');
   });
 
+  test('closed by the keys sendKeyStrokes() sent resolves, as every key went through', async () => {
+    const client = mockClient();
+    buttonPage(client);
+    Object.assign(client, {
+      performActions: vi.fn().mockResolvedValue(undefined),
+      // chromedriver answers the release, a command of its own, after the window has gone.
+      releaseActions: vi.fn().mockRejectedValue(CLOSED),
+    });
+    await webView(client).getByRole('button', { name: 'Save' }).sendKeyStrokes('ok\n');
+    expect(client.performActions).toHaveBeenCalledTimes(1);
+    expect(client.releaseActions).toHaveBeenCalledTimes(1);
+    expect(switches(client)).not.toContain('NATIVE_APP');
+  });
+
+  test('sendKeyStrokes() still fails on any other error from the release', async () => {
+    const client = mockClient();
+    buttonPage(client);
+    const broken = new Error('unknown error: cannot release');
+    Object.assign(client, {
+      performActions: vi.fn().mockResolvedValue(undefined),
+      releaseActions: vi.fn().mockRejectedValue(broken),
+    });
+    await expect(
+      webView(client).getByRole('button', { name: 'Save' }).sendKeyStrokes('ok'),
+    ).rejects.toBe(broken);
+  });
+
   test('closed while another action ran fails it without running it again', async () => {
     const client = mockClient();
     buttonPage(client);

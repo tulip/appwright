@@ -287,7 +287,16 @@ export class Locator {
         },
       ]);
 
-      await this.webDriverClient.releaseActions();
+      try {
+        await this.webDriverClient.releaseActions();
+      } catch (error) {
+        // Keys that close their window (Enter on a popup's form) were all sent, and
+        // `performActions` resolved, but chromedriver answers the release, a command of its own,
+        // with `no such window`. The keys are done, so that is not the action failing.
+        if (!isNoSuchWindowError(error)) {
+          throw error;
+        }
+      }
     });
   }
 
