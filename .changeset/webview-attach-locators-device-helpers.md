@@ -62,7 +62,8 @@ group a match can skip (one side of a top-level alternation, or a group under `?
 `{0,…}`) is no longer narrowed to: `/(Save)|(Discard)/` used to find only "Discard".
 
 **Package.** `request` and the types `APIRequest`, `APIRequestContext`, `APIResponse` and
-`TestInfo` are re-exported from `@playwright/test`. The CLI runs Playwright and Appium by module
+`TestInfo` are re-exported from `@playwright/test`, and the error classes `TimeoutError` and
+`ActionWindowClosedError` are exported for `instanceof` checks. The CLI runs Playwright and Appium by module
 resolution rather than `npx`, so their bins need not be hoisted. Appium is the project's own
 `appium` when it has one, else appwright's, and the run logs which. Playwright is always
 appwright's `@playwright/test`, the one tests import through appwright: a project that pinned a
