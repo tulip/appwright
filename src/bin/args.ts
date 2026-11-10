@@ -9,7 +9,7 @@ import {
 export const DEFAULT_CONFIG_FILE = 'appwright.config.ts';
 
 export type Invocation = {
-  /** Arguments to hand to `npx playwright`, with appwright-only flags removed. */
+  /** Arguments to hand to the Playwright CLI, with appwright-only flags removed. */
   pwArgs: string[];
   /** Extra environment for the Playwright process. */
   env: Record<string, string>;
@@ -18,7 +18,8 @@ export type Invocation = {
 
 function hasConfigFlag(args: readonly string[]): boolean {
   return args.some(
-    (arg) => arg === '--config' || arg === '-c' || arg.startsWith('--config=') || arg.startsWith('-c='),
+    (arg) =>
+      arg === '--config' || arg === '-c' || arg.startsWith('--config=') || arg.startsWith('-c='),
   );
 }
 

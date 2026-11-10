@@ -1,6 +1,6 @@
-import fs from "fs";
-import path from "path";
-import { basePath } from "../utils";
+import fs from 'fs';
+import path from 'path';
+import { basePath } from '../utils';
 
 type TestInWorkerInfo = {
   title: string;
@@ -44,7 +44,7 @@ export class WorkerInfoStore {
     if (!fs.existsSync(filePath)) {
       return undefined;
     }
-    return JSON.parse(fs.readFileSync(filePath, "utf-8")) as WorkerInfo;
+    return JSON.parse(fs.readFileSync(filePath, 'utf-8')) as WorkerInfo;
   }
 
   async getWorkerStartTime(idx: number) {

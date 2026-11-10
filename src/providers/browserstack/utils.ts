@@ -1,10 +1,10 @@
-import fs from "fs";
-import FormData from "form-data";
+import fs from 'fs';
+import FormData from 'form-data';
 
 function getAuthHeader() {
   const userName = process.env.BROWSERSTACK_USERNAME;
   const accessKey = process.env.BROWSERSTACK_ACCESS_KEY;
-  const key = Buffer.from(`${userName}:${accessKey}`).toString("base64");
+  const key = Buffer.from(`${userName}:${accessKey}`).toString('base64');
   return `Basic ${key}`;
 }
 
@@ -22,19 +22,16 @@ export async function uploadImageToBS(imagePath: string): Promise<string> {
 Supported formats include JPG, JPEG, and PNG. Ensure the file exists and the path is correct.`,
     );
   }
-  formData.append("file", fs.createReadStream(imagePath));
-  formData.append("custom_id", "SampleMedia");
-  const fetch = (await import("node-fetch")).default;
-  const response = await fetch(
-    "https://api-cloud.browserstack.com/app-automate/upload-media",
-    {
-      method: "POST",
-      headers: {
-        Authorization: getAuthHeader(),
-      },
-      body: formData,
+  formData.append('file', fs.createReadStream(imagePath));
+  formData.append('custom_id', 'SampleMedia');
+  const fetch = (await import('node-fetch')).default;
+  const response = await fetch('https://api-cloud.browserstack.com/app-automate/upload-media', {
+    method: 'POST',
+    headers: {
+      Authorization: getAuthHeader(),
     },
-  );
+    body: formData,
+  });
 
   const data = (await response.json()) as MediaUploadResponse;
   const imageURL = data.media_url.trim();
