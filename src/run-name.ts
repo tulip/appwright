@@ -45,7 +45,7 @@ type FlagValues = { values: string[]; rest: string[] };
  * Removes every `<flag> value` / `<flag>=value` occurrence from `argv`. Throws when the flag is
  * present without a value (a following argument that starts with `-` does not count as a value).
  */
-function takeFlag(argv: readonly string[], flag: string, missingValueMessage: string): FlagValues {
+export function takeFlag(argv: readonly string[], flag: string, missingValueMessage: string): FlagValues {
   const values: string[] = [];
   const rest: string[] = [];
   for (let i = 0; i < argv.length; i++) {
