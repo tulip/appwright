@@ -617,9 +617,9 @@ export class Locator {
       try {
         return await act(elementId);
       } catch (error) {
-        // The window was closed when the action reached it. chromedriver checks the window
-        // before running a command, so the action did not run; an action that closes its own
-        // window gets OK instead. As an `ActionWindowClosedError` it is not a closed window to
+        // The window was closed when one of the action's commands reached it. chromedriver
+        // checks the window before running a command, so that command did not run; a command
+        // that closes its own window gets OK instead. As an `ActionWindowClosedError` it is not a closed window to
         // the WebView's window-closure recovery, which would run the action on another page. A
         // closed window found by the wait, before acting, is left as the driver's error, for that
         // recovery to bind the WebView again and retry.
