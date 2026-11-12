@@ -101,7 +101,7 @@ describe('recordingOptions', () => {
 
 describe('isInsideAllHook', () => {
   const withHook = (hookType: string | undefined) =>
-    ({ _currentHookType: () => hookType } as unknown as TestInfo);
+    ({ _currentHookType: () => hookType }) as unknown as TestInfo;
 
   test('is true for beforeAll and afterAll', () => {
     expect(isInsideAllHook(withHook('beforeAll'))).toBe(true);
@@ -299,7 +299,7 @@ describe('startScreenRecording', () => {
 
 describe('finishRecordingAndClose', () => {
   const fakeDevice = (calls: string[]) =>
-    ({ close: vi.fn(async () => void calls.push('close')) } as unknown as Device);
+    ({ close: vi.fn(async () => void calls.push('close')) }) as unknown as Device;
 
   test('stops the recording before the session closes', async () => {
     const calls: string[] = [];
