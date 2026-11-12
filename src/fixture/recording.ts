@@ -194,15 +194,18 @@ export async function startScreenRecording(
 }
 
 /**
- * Stops the test's recording, then closes the session even if stopping or saving threw, so a
- * failed save never leaves the Appium session holding the device until `newCommandTimeout`.
+ * Stops the test's recording, runs `beforeClose` (the fixture's other teardown on the session),
+ * then closes the session even if either threw, so a failed save never leaves the Appium session
+ * holding the device until `newCommandTimeout`.
  */
 export async function finishRecordingAndClose(
   device: Device,
   recording: ScreenRecording | undefined,
+  beforeClose?: () => Promise<void>,
 ): Promise<void> {
   try {
     await recording?.finish();
+    await beforeClose?.();
   } finally {
     await device.close();
   }

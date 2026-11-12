@@ -4,6 +4,17 @@
 
 In Appwright, writing a test is simple and similar to how tests are written in Playwright, but with enhanced mobile capabilities.
 
+A suite does not need its own `@playwright/test` dependency. Besides `test` and `expect`, the package re-exports Playwright's `request` and the types around it (`APIRequest`, `APIRequestContext`, `APIResponse`, `TestInfo`), for calling an app's HTTP API from a test or a hook:
+
+```ts
+import { test, type APIRequestContext } from '@tulip/appwright';
+
+let api: APIRequestContext;
+test.beforeAll(async ({ playwright }) => {
+  api = await playwright.request.newContext({ baseURL: process.env.SITE_URL });
+});
+```
+
 ## Configure Projects
 
 In Appwright, you can define multiple test configurations for different platforms (Android, iOS, etc.) within your `appwright.config.ts`. This configuration tells Appwright how to run your tests on different devices and environments.

@@ -7,6 +7,7 @@ import {
   AppwrightConfig,
   AppwrightLocator,
   CleanDeviceOptions,
+  DeviceOrientation,
   DeviceProvider,
   Platform,
 } from '../types';
@@ -78,7 +79,12 @@ export const test = base.extend<TestLevelFixtures, WorkerLevelFixtures>({
       providerName: deviceProviderName,
     });
     await use(device);
-    await finishRecordingAndClose(device, recording);
+    // Stop recording before the rotation back, so the video ends where the test did. A rotation
+    // outlives the session: put back what the project configures for the next test.
+    const project = testInfo.project as FullProject<AppwrightConfig>;
+    await finishRecordingAndClose(device, recording, () =>
+      device.restoreOrientation(project.use.device?.orientation ?? DeviceOrientation.PORTRAIT),
+    );
     await deviceProvider.syncTestDetails?.({
       name: testInfo.title,
       status: testInfo.status,
@@ -111,6 +117,11 @@ export const test = base.extend<TestLevelFixtures, WorkerLevelFixtures>({
       );
       await use(device);
       await workerInfoStore.saveWorkerEndTime(workerIndex, new Date());
+      // Only at the end of the worker: tests sharing this device see each other's rotations.
+      await device.restoreOrientation(
+        (project as FullProject<AppwrightConfig>).use.device?.orientation ??
+          DeviceOrientation.PORTRAIT,
+      );
       await device.close();
     },
     { scope: 'worker' },

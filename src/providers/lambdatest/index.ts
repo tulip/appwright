@@ -7,11 +7,7 @@ import { FullProject } from '@playwright/test';
 
 import { Device } from '../../device';
 import { logger } from '../../logger';
-import {
-  AppwrightConfig,
-  DeviceProvider,
-  LambdaTestConfig,
-} from '../../types';
+import { AppwrightConfig, DeviceProvider, LambdaTestConfig } from '../../types';
 import { getAuthHeader } from './utils';
 
 type LambdatestSessionDetails = {
@@ -197,7 +193,6 @@ export class LambdaTestDeviceProvider implements DeviceProvider {
               throw new Error('Failed to get reader from response body.');
             }
             const streamToFile = async () => {
-              // eslint-disable-next-line no-constant-condition
               while (true) {
                 const { done, value } = await reader.read();
                 if (done) break;

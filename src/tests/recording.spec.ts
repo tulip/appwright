@@ -318,6 +318,25 @@ describe('finishRecordingAndClose', () => {
     expect(calls).toEqual(['close']);
   });
 
+  test('runs the other teardown between stopping and closing', async () => {
+    const calls: string[] = [];
+    await finishRecordingAndClose(
+      fakeDevice(calls),
+      { finish: async () => void calls.push('finish') },
+      async () => void calls.push('restoreOrientation'),
+    );
+    expect(calls).toEqual(['finish', 'restoreOrientation', 'close']);
+  });
+
+  test('closes the session even when the other teardown throws', async () => {
+    const calls: string[] = [];
+    const finishing = finishRecordingAndClose(fakeDevice(calls), undefined, () =>
+      Promise.reject(new Error('rotation failed')),
+    );
+    await expect(finishing).rejects.toThrow('rotation failed');
+    expect(calls).toEqual(['close']);
+  });
+
   test('closes the session when nothing was recorded', async () => {
     const calls: string[] = [];
     await finishRecordingAndClose(fakeDevice(calls), undefined);

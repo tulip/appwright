@@ -43,7 +43,9 @@ function cmd(command: string[], options: { env?: Record<string, string> }): Prom
   }
   logger.log(`Run name: ${invocation.runName}`);
   try {
-    await cmd(['npx', 'playwright', ...invocation.pwArgs], { env: invocation.env });
+    await cmd([process.execPath, require.resolve('@playwright/test/cli'), ...invocation.pwArgs], {
+      env: invocation.env,
+    });
   } catch (error: any) {
     logger.error(`Error while running playwright test: ${error}`);
     process.exit(1);
