@@ -1,10 +1,12 @@
 import net from 'net';
+import path from 'path';
 
-import { afterEach, expect, test } from 'vitest';
+import { afterEach, describe, expect, test } from 'vitest';
 
 import {
   AppiumPortInUseError,
   findFreePort,
+  pathWithBundledFfmpeg,
   startAppiumServerOnFreePort,
 } from '../providers/appium';
 
@@ -83,4 +85,30 @@ test('startAppiumServerOnFreePort does not retry other start failures', async ()
     }),
   ).rejects.toThrow('spawn failed');
   expect(calls).toBe(1);
+});
+
+describe('pathWithBundledFfmpeg', () => {
+  const ffmpeg = path.join(path.sep, 'pkg', '@ffmpeg-installer', 'darwin-arm64', 'ffmpeg');
+  const ffmpegDir = path.dirname(ffmpeg);
+  const bin = path.join(path.sep, 'usr', 'bin');
+  const local = path.join(path.sep, 'usr', 'local', 'bin');
+
+  test('appends the bundled ffmpeg folder so an installed ffmpeg wins', () => {
+    expect(pathWithBundledFfmpeg([local, bin].join(path.delimiter), ffmpeg)).toBe(
+      [local, bin, ffmpegDir].join(path.delimiter),
+    );
+  });
+
+  test('does not add the folder twice', () => {
+    const current = [bin, ffmpegDir].join(path.delimiter);
+    expect(pathWithBundledFfmpeg(current, ffmpeg)).toBe(current);
+  });
+
+  test('works without a PATH', () => {
+    expect(pathWithBundledFfmpeg(undefined, ffmpeg)).toBe(ffmpegDir);
+  });
+
+  test('defaults to the ffmpeg shipped with appwright', () => {
+    expect(pathWithBundledFfmpeg('').length).toBeGreaterThan(0);
+  });
 });

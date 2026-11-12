@@ -32,7 +32,6 @@ const resolveVideoReporter = () => {
 const defaultReporters: ReporterDescription[] = [['list'], ['html', { open: 'always' }]];
 
 const defaultConfig: PlaywrightTestConfig<AppwrightConfig> = {
-  globalSetup: resolveGlobalSetup(),
   testDir: './tests',
   // This is turned off so that a persistent device fixture can be
   // used across tests in a file where they run sequentially
@@ -72,14 +71,26 @@ export function defineConfig(config: PlaywrightTestConfig<AppwrightConfig>) {
   const outputDir = publishOutputDir(runOutputDir(runName, config.outputDir ?? DEFAULT_OUTPUT_DIR));
   return defineConfigPlaywright<AppwrightConfig>({
     ...defaultConfig,
+    // Resolved here rather than in `defaultConfig` so importing this module does not need the
+    // built package next to it.
+    globalSetup: resolveGlobalSetup(),
     ...config,
     outputDir,
     reporter: [[resolveVideoReporter()], ...applyRunNameToReporters(reporterConfig, runName)],
-    use: {
-      ...defaultConfig.use,
-      expectTimeout: config.use?.expectTimeout
-        ? config.use!.expectTimeout
-        : defaultConfig.use?.expectTimeout,
-    },
+    use: mergeUseOptions(config.use),
   });
+}
+
+/**
+ * The top-level `use` of a config: appwright's defaults overlaid with the consumer's, so options
+ * such as `video` apply to every project as they do in Playwright.
+ */
+export function mergeUseOptions(
+  use: PlaywrightTestConfig<AppwrightConfig>['use'],
+): PlaywrightTestConfig<AppwrightConfig>['use'] {
+  return {
+    ...defaultConfig.use,
+    ...use,
+    expectTimeout: use?.expectTimeout ? use.expectTimeout : defaultConfig.use?.expectTimeout,
+  };
 }

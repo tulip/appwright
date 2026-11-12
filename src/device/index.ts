@@ -1525,6 +1525,29 @@ export class Device {
   }
 
   /**
+   * Starts Appium's screen recording for this session.
+   *
+   * Do not call this from a test: when Playwright's `video` option is set, the `device` fixture is
+   * already recording, and a second start replaces that recording, so the test's video loses
+   * everything before the call.
+   * @internal Used by the `device` fixture to record each test
+   */
+  async startScreenRecording(options: Record<string, unknown>): Promise<void> {
+    await this.webDriverClient.startRecordingScreen(options);
+  }
+
+  /**
+   * Stops the screen recording and returns the video as base64 (empty when nothing was recorded).
+   *
+   * Do not call this from a test: the `device` fixture stops its own recording after the test, and
+   * a stop from the test leaves it nothing to attach.
+   * @internal Used by the `device` fixture to record each test
+   */
+  async stopScreenRecording(): Promise<string> {
+    return await this.webDriverClient.stopRecordingScreen();
+  }
+
+  /**
    * The native view hierarchy as XML — UiAutomator2's dump on Android, XCUITest's on iOS — for
    * finding the attributes a locator can match on. Read from NATIVE_APP whatever context is
    * active, then switched back, so a call between two `webView` steps leaves the WebView bound.
