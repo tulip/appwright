@@ -5,7 +5,7 @@ import type { PlaywrightWorkerOptions, TestInfo, VideoMode } from '@playwright/t
 
 import type { Device } from '../device';
 import { logger } from '../logger';
-import { getProviderClass } from '../providers';
+import { providerRecordsVideo } from '../providers';
 import { Platform } from '../types';
 
 /**
@@ -99,11 +99,6 @@ export function isInsideAllHook(testInfo: TestInfo): boolean {
   return hookType === 'beforeAll' || hookType === 'afterAll';
 }
 
-/** Cloud providers record every session themselves; the reporter downloads those videos. */
-function providerRecordsVideo(providerName: string | undefined): boolean {
-  return !!providerName && !!getProviderClass(providerName).downloadVideo;
-}
-
 /**
  * Why the first recording in this worker failed to start, if one did. A start failure is almost
  * always permanent for the run (no ffmpeg, an ffmpeg without libx264, an emulator below API 27), so
@@ -111,6 +106,9 @@ function providerRecordsVideo(providerName: string | undefined): boolean {
  * a new worker, which tries again.
  */
 let startFailure: string | undefined;
+
+/** Whether this worker has logged that hooks are not recorded. */
+let loggedHookSkip = false;
 
 export type ScreenRecording = {
   /** Stops the recording and, when the video mode keeps it, attaches it to the test as `video`. */
@@ -136,12 +134,17 @@ export async function startScreenRecording(
   if (!shouldRecordVideo(mode, testInfo.retry)) {
     return undefined;
   }
-  if (providerRecordsVideo(options.providerName)) {
+  if (options.providerName && providerRecordsVideo(options.providerName)) {
     return undefined;
   }
   if (isInsideAllHook(testInfo)) {
-    // `testInfo` here belongs to a test next to the hook, so its title would name the wrong thing.
-    logger.log('Not recording the device session of a beforeAll/afterAll hook; only tests are.');
+    // Once per worker: a suite with a `useCleanDevice()` in every block would otherwise log this
+    // for each block. `testInfo` here belongs to a test next to the hook, so its title would name
+    // the wrong thing.
+    if (!loggedHookSkip) {
+      loggedHookSkip = true;
+      logger.log('Not recording the device sessions of beforeAll/afterAll hooks; only tests are.');
+    }
     return undefined;
   }
   if (startFailure !== undefined) {

@@ -9,11 +9,10 @@ import {
   CleanDeviceOptions,
   DeviceOrientation,
   DeviceProvider,
-  Platform,
 } from '../types';
 import { TimeoutError } from '../types/errors';
 import { WebView } from '../webView';
-import { finishRecordingAndClose, startScreenRecording } from './recording';
+import { useDevice } from './device';
 import { WorkerInfoStore } from './workerInfo';
 
 type TestLevelFixtures = {
@@ -48,48 +47,7 @@ export const test = base.extend<TestLevelFixtures, WorkerLevelFixtures>({
     await use(deviceProvider);
   },
   device: async ({ deviceProvider, video }, use, testInfo) => {
-    const device = await deviceProvider.getDevice();
-    const platform = (testInfo.project as FullProject<AppwrightConfig>).use.platform;
-
-    // For Android, activate the app before running the test to ensure it's in the foreground.
-    if (platform === Platform.ANDROID) {
-      try {
-        await device.activateApp();
-      } catch (error) {
-        // Silently ignore activation errors
-        console.log('[Fixture] Failed to activate app:', error);
-      }
-    }
-
-    const deviceProviderName = (testInfo.project as FullProject<AppwrightConfig>).use.device
-      ?.provider;
-    testInfo.annotations.push({
-      type: 'providerName',
-      description: deviceProviderName,
-    });
-    testInfo.annotations.push({
-      type: 'sessionId',
-      description: deviceProvider.sessionId,
-    });
-    await deviceProvider.syncTestDetails?.({ name: testInfo.title });
-    // Honors Playwright's `video` option for local devices and emulators; cloud providers record
-    // every session themselves and the reporter downloads those videos.
-    const recording = await startScreenRecording(device, testInfo, {
-      video,
-      providerName: deviceProviderName,
-    });
-    await use(device);
-    // Stop recording before the rotation back, so the video ends where the test did. A rotation
-    // outlives the session: put back what the project configures for the next test.
-    const project = testInfo.project as FullProject<AppwrightConfig>;
-    await finishRecordingAndClose(device, recording, () =>
-      device.restoreOrientation(project.use.device?.orientation ?? DeviceOrientation.PORTRAIT),
-    );
-    await deviceProvider.syncTestDetails?.({
-      name: testInfo.title,
-      status: testInfo.status,
-      reason: testInfo.error?.message,
-    });
+    await useDevice(deviceProvider, video, use, testInfo);
   },
   webView: async ({ device }, use) => {
     const webView = new WebView(device);

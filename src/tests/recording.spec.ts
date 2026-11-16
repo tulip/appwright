@@ -223,15 +223,19 @@ describe('startScreenRecording', () => {
     expect(device.startScreenRecording).not.toHaveBeenCalled();
   });
 
-  test('does not record a beforeAll hook', async () => {
+  test('does not record beforeAll/afterAll hooks, and says so once per worker', async () => {
     const device = fakeDevice();
-    const testInfo = fakeTestInfo({ _currentHookType: () => 'beforeAll' });
-    expect(await run(device, testInfo, 'on')).toBeUndefined();
+    expect(
+      await run(device, fakeTestInfo({ _currentHookType: () => 'beforeAll' }), 'on'),
+    ).toBeUndefined();
+    expect(
+      await run(device, fakeTestInfo({ _currentHookType: () => 'afterAll' }), 'on'),
+    ).toBeUndefined();
     expect(device.startScreenRecording).not.toHaveBeenCalled();
     // The hook's test info belongs to a neighbouring test, so the log must not name it.
     const logged = vi.mocked(console.log).mock.calls.map((args) => String(args[1]));
     expect(logged).toEqual([
-      'Not recording the device session of a beforeAll/afterAll hook; only tests are.',
+      'Not recording the device sessions of beforeAll/afterAll hooks; only tests are.',
     ]);
   });
 

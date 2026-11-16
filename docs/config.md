@@ -391,11 +391,13 @@ device is ready and stops it after the test, before the session closes. The vide
   without a video; the recording never fails a test. A start failure is usually permanent for the
   run (no ffmpeg, no `libx264`, an old emulator), so after the first one the worker stops trying
   and records no more tests. A retry runs in a new worker, which tries again.
-- **Interrupted runs.** Ending the run normally, or pressing Ctrl-C, stops every recording with its
-  session. If the Appium server is killed instead (appwright sends `SIGKILL` when it has not exited
-  5 s after `SIGTERM`), the recorder can outlive it: an iOS `ffmpeg` keeps running and writing to
-  the temp folder until you kill it, and Android's `screenrecord` runs for up to three more minutes
-  and leaves its file in `/sdcard`.
+- **Interrupted runs.** A run that ends normally stops each recording with its session. Ctrl-C
+  during `appwright test` ends the run at once, without Playwright's teardown, so the test that was
+  running gets no video. Its recorder stops too, but leaves its partial file behind: an `.mp4` in
+  `/sdcard` on Android, an `appium_*.mp4` in a temp folder on iOS. If only the Appium server is
+  killed (appwright sends `SIGKILL` when it has not exited 5 s after `SIGTERM`), the recorder can
+  outlive it: an iOS `ffmpeg` can keep writing to the temp folder until you kill it, and Android's
+  `screenrecord` can run for up to three more minutes.
 - **`persistentDevice`.** Tests that use `persistentDevice` are not recorded on local devices and
   emulators.
 

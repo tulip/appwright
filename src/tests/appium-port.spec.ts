@@ -1,6 +1,7 @@
 import net from 'net';
 import path from 'path';
 
+import ffmpegInstaller from '@ffmpeg-installer/ffmpeg';
 import { afterEach, describe, expect, test } from 'vitest';
 
 import {
@@ -109,6 +110,6 @@ describe('pathWithBundledFfmpeg', () => {
   });
 
   test('defaults to the ffmpeg shipped with appwright', () => {
-    expect(pathWithBundledFfmpeg('').length).toBeGreaterThan(0);
+    expect(pathWithBundledFfmpeg('')).toBe(path.dirname(ffmpegInstaller.path));
   });
 });

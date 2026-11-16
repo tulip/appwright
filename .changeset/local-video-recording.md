@@ -2,7 +2,7 @@
 '@tulip/appwright': minor
 ---
 
-`local-device` and `emulator` projects record the device screen for each test that uses the `device` fixture when Playwright's `video` option is set (`on`, `retain-on-failure` or `on-first-retry`), and attach it to the test as `video` so it plays in the html report. `beforeAll`/`afterAll` hooks such as `useCleanDevice()` are not recorded. A recording that fails to start or stop logs a warning without failing the test, and after a failed start the worker stops trying. Recordings stop after 15 minutes, and Android records at 1.5 Mbps so a full recording can still be returned in one piece. Unit-tested, and run on an Android emulator (`on`, `retain-on-failure`, `on-first-retry`) and an iOS simulator (`on`); physical devices were not tried.
+`local-device` and `emulator` projects record the device screen for each test that uses the `device` fixture when Playwright's `video` option is set (`on`, `retain-on-failure` or `on-first-retry`), and attach it to the test as `video` so it plays in the html report. `beforeAll`/`afterAll` hooks such as `useCleanDevice()` are not recorded. A recording that fails to start or stop logs a warning without failing the test, and after a failed start the worker stops trying. Recordings stop after 15 minutes, and Android records at 1.5 Mbps so a full recording can still be returned in one piece.
 
 The Appium server appwright starts now has the bundled ffmpeg at the end of its `PATH`, which both drivers need for screen recording.
 
