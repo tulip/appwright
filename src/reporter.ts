@@ -1,5 +1,5 @@
 import type { Reporter, TestCase, TestResult } from '@playwright/test/reporter';
-import { getProviderClass } from './providers';
+import { getProviderClass, providerRecordsVideo } from './providers';
 import fs from 'fs';
 import path from 'path';
 import ffmpeg from 'fluent-ffmpeg';
@@ -66,7 +66,7 @@ class VideoDownloader implements Reporter {
           if (!providerName || !sessionId) {
             throw new Error(`Provider name or session id not found for worker: ${workerIndex}`);
           }
-          if (!this.providerSupportsVideo(providerName)) {
+          if (!providerRecordsVideo(providerName)) {
             return; // Nothing to do here
           }
           if (endTime) {
@@ -169,11 +169,6 @@ class VideoDownloader implements Reporter {
         return downloadedVideo;
       });
     this.downloadPromises.push(downloadPromise);
-  }
-
-  private providerSupportsVideo(providerName: string) {
-    const provider = getProviderClass(providerName);
-    return !!provider.downloadVideo;
   }
 }
 

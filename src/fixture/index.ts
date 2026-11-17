@@ -9,10 +9,10 @@ import {
   CleanDeviceOptions,
   DeviceOrientation,
   DeviceProvider,
-  Platform,
 } from '../types';
 import { TimeoutError } from '../types/errors';
 import { WebView } from '../webView';
+import { useDevice } from './device';
 import { WorkerInfoStore } from './workerInfo';
 
 type TestLevelFixtures = {
@@ -46,41 +46,8 @@ export const test = base.extend<TestLevelFixtures, WorkerLevelFixtures>({
     const deviceProvider = createDeviceProvider(testInfo.project, testInfo.parallelIndex);
     await use(deviceProvider);
   },
-  device: async ({ deviceProvider }, use, testInfo) => {
-    const device = await deviceProvider.getDevice();
-    const platform = (testInfo.project as FullProject<AppwrightConfig>).use.platform;
-
-    // For Android, activate the app before running the test to ensure it's in the foreground.
-    if (platform === Platform.ANDROID) {
-      try {
-        await device.activateApp();
-      } catch (error) {
-        // Silently ignore activation errors
-        console.log('[Fixture] Failed to activate app:', error);
-      }
-    }
-
-    const deviceProviderName = (testInfo.project as FullProject<AppwrightConfig>).use.device
-      ?.provider;
-    testInfo.annotations.push({
-      type: 'providerName',
-      description: deviceProviderName,
-    });
-    testInfo.annotations.push({
-      type: 'sessionId',
-      description: deviceProvider.sessionId,
-    });
-    await deviceProvider.syncTestDetails?.({ name: testInfo.title });
-    await use(device);
-    // A rotation outlives the session: put back what the project configures for the next test.
-    const project = testInfo.project as FullProject<AppwrightConfig>;
-    await device.restoreOrientation(project.use.device?.orientation ?? DeviceOrientation.PORTRAIT);
-    await device.close();
-    await deviceProvider.syncTestDetails?.({
-      name: testInfo.title,
-      status: testInfo.status,
-      reason: testInfo.error?.message,
-    });
+  device: async ({ deviceProvider, video }, use, testInfo) => {
+    await useDevice(deviceProvider, video, use, testInfo);
   },
   webView: async ({ device }, use) => {
     const webView = new WebView(device);

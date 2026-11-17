@@ -21,6 +21,14 @@ export function getProviderClass(provider: string): any {
 }
 
 /**
+ * Whether the provider records every session itself (the cloud providers): the reporter downloads
+ * those videos, and the `device` fixture leaves recording to them.
+ */
+export function providerRecordsVideo(provider: string): boolean {
+  return !!getProviderClass(provider).downloadVideo;
+}
+
+/**
  * Creates the device provider for a project.
  *
  * @param slot worker slot (Playwright `parallelIndex`). Local providers use it to pick
